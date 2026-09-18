@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS no longer opens Cursor.app's `~/Library/Application Support/Cursor/…/state.vscdb`
+  unless `$CURSOR_STATE_DB` is set, and Herdr-spawned processes no longer read
+  `~/.cursor` (chats `store.db`, `cli-config.json`, `auth.json`) unless
+  `$CURSOR_HOME` / `$CURSOR_AUTH_FILE` / `$CURSOR_STATE_DB` is set. Those trees
+  carry Cursor `com.apple.provenance`; this plugin is ad-hoc signed, so each
+  event/watch/hook process was prompting Ghostty `SystemPolicyAppData`
+  ("would like to access data from other apps"). Credentials stay on Keychain;
+  model/cache/context stay on the hook mailbox. The cache identity mtime is
+  the plugin-state Keychain marker, not a `stat` of `~/.cursor/auth.json` —
+  that leftover watch-tick was enough to keep the dialog after file reads
+  were already gated. The Keychain approval marker moves to plugin state
+  (`cursor-keychain-approved`); configure copies a legacy
+  `~/.cursor/.herdr-keychain-approved` once. A CLI login never falls through
+  to the IDE token, including `AGENT_CLI_CREDENTIAL_STORE=file`.
+
+### Added
+
+- Agent setup playbook (`docs/agent-setup.md`, `docs/agent-setup.zh-CN.md`)
+  and a copy-paste prompt in both READMEs, so a coding agent on the machine
+  that runs Herdr can detect local CLIs, install matching collectors, and
+  finish font maps, Herdr integrations, and macOS Keychain approval instead
+  of stopping at `./install.sh`.
+
 ## [1.6.1] - 2026-09-18
 
 ### Fixed

@@ -136,9 +136,12 @@ than a wrong number.
 - Cursor stamps `sha256("cursor\0" || access token)`. Included is
   `planUsage.totalPercentUsed` when present — the CLI usage panel's Included
   row — and only then `includedSpend / limit`. The IDE `state.vscdb` mtime is
-  not a credential gate. On macOS, `cursor-agent login` stores the token in
-  Keychain, not `auth.json`; do not fall back to the IDE token while the CLI
-  still has `cli-config.json` `authInfo`.
+  not a credential gate. On macOS without `$CURSOR_HOME` / `$CURSOR_AUTH_FILE`
+  / `$CURSOR_STATE_DB`, `auth_mtime_unix` is the plugin-state Keychain marker
+  — a `stat` of `~/.cursor/auth.json` is enough for Ghostty TCC. On macOS,
+  `cursor-agent login` stores the token in Keychain, not `auth.json`; do not
+  fall back to the IDE token while the CLI still has `cli-config.json`
+  `authInfo`.
 
 ## Devin's per-session model is local SQLite, not the quota API
 
@@ -196,11 +199,17 @@ Credentials, in order: `accessToken` in the CLI auth file (`$CURSOR_AUTH_FILE`,
 else `~/.cursor/auth.json` on macOS, else `$XDG_CONFIG_HOME/cursor/auth.json`);
 on macOS, Keychain item `cursor-access-token` / `cursor-user` (what
 `cursor-agent login` writes when `AGENT_CLI_CREDENTIAL_STORE` is default);
-then `cursorAuth/accessToken` in the desktop `state.vscdb` (`$CURSOR_STATE_DB`
-or the platform Cursor config path) only when the CLI has no login of its
-own (`cli-config.json` has no `authInfo`). Open that SQLite file read-only and
-select only that one key. Never copy it, never use its mtime as a gate, never
-read `refreshToken`, never send a `WorkosCursorSessionToken` cookie. Background
+then `cursorAuth/accessToken` in the desktop `state.vscdb` only when the CLI
+has no login of its own **and** `$CURSOR_STATE_DB` is set. On macOS, do not
+open `~/.cursor` or the default `~/Library/Application Support/Cursor/…/state.vscdb`
+from event/watch/refresh/hook: those trees are Cursor-provenance, this binary
+is ad-hoc, and TCC prompts Ghostty "would like to access data from other
+apps" on every process. File reads resume only with `$CURSOR_HOME` /
+`$CURSOR_AUTH_FILE` / `$CURSOR_STATE_DB`. Model/cache/context come from the
+hook mailbox; the Keychain approval marker lives in plugin state. The cache
+identity mtime is that marker, never a `stat` of `~/.cursor/auth.json`. Never
+copy the IDE database, never use its mtime as a gate, never read `refreshToken`,
+never send a `WorkosCursorSessionToken` cookie. Background
 processes never prompt for Keychain: without a recorded approval marker the
 keychain branch is skipped, and the user approves once via
 `refresh --provider cursor --keychain-approve` (click **Always Allow**, not
