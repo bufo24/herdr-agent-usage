@@ -45,6 +45,7 @@ pub fn uninstall() -> Result<()> {
 }
 
 pub fn apply_at(path: &Path, state: &Path, executable: &Path) -> Result<()> {
+    crate::providers::cursor::migrate_legacy_keychain_marker(state);
     let script = script_path(path);
     write_wrapper_script(&script, state, executable)?;
     let command = wrapper_command(&script);

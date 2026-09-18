@@ -9,10 +9,17 @@
 //! has no token, the collector reads that Keychain item — the login Herdr
 //! panes actually use. Background processes never prompt: without a recorded
 //! approval marker the keychain branch is skipped, and the user approves once
-//! via `refresh --provider cursor --keychain-approve`. The desktop app's
-//! `state.vscdb` key `cursorAuth/accessToken` is a last resort only when the
-//! CLI has no login of its own. The 20 GB SQLite file is never copied, and
-//! its mtime is never used as a credential gate: the IDE writes it constantly.
+//! via `refresh --provider cursor --keychain-approve`. On macOS, Herdr-spawned
+//! processes (event, watch, refresh, hook) must not open `~/.cursor` or
+//! Cursor.app's Application Support: those trees carry `com.apple.provenance`
+//! for Cursor, this binary is ad-hoc signed, and TCC attributes the access to
+//! Ghostty as `kTCCServiceSystemPolicyAppData` ("would like to access data
+//! from other apps") on **every** plugin process. Credentials come from
+//! Keychain; model/cache/context come from the hook mailbox under plugin
+//! state. `$CURSOR_HOME` / `$CURSOR_AUTH_FILE` / `$CURSOR_STATE_DB` opt back
+//! into file reads (tests and explicit IDE fallback). The desktop
+//! `state.vscdb` is never the default macOS path. The 20 GB SQLite file is
+//! never copied, and its mtime is never used as a credential gate.
 //!
 //! Quota is `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`,
 //! the DashboardService call the CLI itself makes, authenticated with that
@@ -298,12 +305,14 @@ fn account_pin(access_token: &str) -> String {
 }
 
 fn read_credentials() -> std::result::Result<CursorCredentials, ProviderError> {
-    if let Ok(path) = auth_path() {
-        if path.is_file() {
-            match read_auth_file(&path) {
-                Ok(credentials) => return Ok(credentials),
-                Err(ProviderError::MissingCredentials) => {}
-                Err(error) => return Err(error),
+    if cursor_fs_access_allowed() {
+        if let Ok(path) = auth_path() {
+            if path.is_file() {
+                match read_auth_file(&path) {
+                    Ok(credentials) => return Ok(credentials),
+                    Err(ProviderError::MissingCredentials) => {}
+                    Err(error) => return Err(error),
+                }
             }
         }
     }
@@ -311,6 +320,15 @@ fn read_credentials() -> std::result::Result<CursorCredentials, ProviderError> {
         Ok(credentials) => return Ok(credentials),
         Err(ProviderError::MissingCredentials) => {}
         Err(error) => return Err(error),
+    }
+    // `authInfo` means this machine has a Cursor CLI login. Do not open the
+    // IDE database: that is a different account, and on macOS the default
+    // path is Cursor.app's Application Support (Ghostty TCC prompt storm).
+    if cli_config_has_login() {
+        return Err(ProviderError::Unavailable(
+            "macOS Keychain approval needed — run `herdr-agent-quota refresh --provider cursor --keychain-approve`"
+                .to_string(),
+        ));
     }
     read_ide_access_token()
 }
@@ -367,7 +385,12 @@ fn set_keychain_approve_attempt_for_test(value: bool) {
 }
 
 fn keychain_approval_marker() -> Option<PathBuf> {
-    Some(auth_path().ok()?.parent()?.join(".herdr-keychain-approved"))
+    if cursor_fs_access_allowed() {
+        return Some(auth_path().ok()?.parent()?.join(".herdr-keychain-approved"));
+    }
+    CacheStore::from_env()
+        .ok()
+        .map(|cache| cache.root().join("cursor-keychain-approved"))
 }
 
 fn keychain_approval_mtime() -> Option<u64> {
@@ -460,6 +483,9 @@ fn read_cli_keychain_uncached() -> std::result::Result<CursorCredentials, Provid
 }
 
 fn cli_config_has_login() -> bool {
+    if !cursor_fs_access_allowed() {
+        return false;
+    }
     let Some(value) = cursor_data_home()
         .ok()
         .and_then(|home| read_bounded_json(&home.join("cli-config.json")))
@@ -596,7 +622,7 @@ fn terminate_command(child: &mut std::process::Child) {
 }
 
 fn read_ide_access_token() -> std::result::Result<CursorCredentials, ProviderError> {
-    let path = state_db_path().map_err(|_| ProviderError::MissingCredentials)?;
+    let path = state_db_path().ok_or(ProviderError::MissingCredentials)?;
     if !path.is_file() {
         return Err(ProviderError::MissingCredentials);
     }
@@ -627,19 +653,24 @@ fn token_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<String> {
     }
 }
 
-fn state_db_path() -> Result<PathBuf> {
+fn state_db_path() -> Option<PathBuf> {
     if let Some(path) = non_empty_env("CURSOR_STATE_DB") {
-        return Ok(PathBuf::from(path));
+        return Some(PathBuf::from(path));
     }
+    // macOS: never stat the default Cursor.app container. `exists()` on
+    // `~/Library/Application Support/Cursor` is enough for TCC to ask
+    // Ghostty "would like to access data from other apps" on every
+    // herdr-agent-quota process (event, watch tick, hook). Opt in with
+    // `$CURSOR_STATE_DB` if an IDE-only login is required.
     #[cfg(target_os = "macos")]
     {
-        let home = non_empty_env("HOME").context("HOME is not set")?;
-        Ok(PathBuf::from(home)
-            .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"))
+        None
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(cursor_ide_config_dir()?.join("User/globalStorage/state.vscdb"))
+        cursor_ide_config_dir()
+            .ok()
+            .map(|dir| dir.join("User/globalStorage/state.vscdb"))
     }
 }
 
@@ -680,7 +711,45 @@ fn cursor_data_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".cursor"))
 }
 
+/// Whether this process may open Cursor CLI/IDE files.
+///
+/// macOS tags `~/.cursor` and Cursor.app Application Support with Cursor's
+/// `com.apple.provenance`. This plugin is ad-hoc signed, so those opens are
+/// attributed to Ghostty and prompt `SystemPolicyAppData` on every event,
+/// watch tick, and hook. Explicit `CURSOR_HOME` / `CURSOR_AUTH_FILE` /
+/// `CURSOR_STATE_DB` (tests and opt-in) turn file access back on. Linux is
+/// unchanged.
+fn cursor_fs_access_allowed() -> bool {
+    if non_empty_env("CURSOR_HOME").is_some()
+        || non_empty_env("CURSOR_AUTH_FILE").is_some()
+        || non_empty_env("CURSOR_STATE_DB").is_some()
+    {
+        return true;
+    }
+    !cfg!(target_os = "macos")
+}
+
+/// Copy a legacy `~/.cursor/.herdr-keychain-approved` marker into plugin
+/// state. Called from configure, not from watch/event: one possible TCC
+/// prompt at install is better than one per turn.
+pub fn migrate_legacy_keychain_marker(state: &Path) {
+    let dest = state.join("cursor-keychain-approved");
+    if dest.exists() {
+        return;
+    }
+    let Some(home) = non_empty_env("HOME") else {
+        return;
+    };
+    let src = PathBuf::from(home).join(".cursor/.herdr-keychain-approved");
+    if src.is_file() {
+        let _ = fs::copy(&src, &dest);
+    }
+}
+
 fn configured_model() -> Option<String> {
+    if !cursor_fs_access_allowed() {
+        return None;
+    }
     configured_model_from(&read_bounded_json(
         &cursor_data_home().ok()?.join("cli-config.json"),
     )?)
@@ -719,10 +788,11 @@ fn json_text(value: Option<&Value>) -> Option<String> {
 }
 
 fn enrich_local_sessions(snapshot: &mut ProviderSnapshot, session_ids: &[String]) {
-    let Ok(home) = cursor_data_home() else {
-        return;
-    };
-    enrich_local_sessions_at(snapshot, &home, session_ids);
+    if cursor_fs_access_allowed() {
+        if let Ok(home) = cursor_data_home() {
+            enrich_local_sessions_at(snapshot, &home, session_ids);
+        }
+    }
     for session_id in session_ids {
         overlay_hook_context(snapshot, Some(session_id));
     }
@@ -1146,6 +1216,9 @@ pub fn overlay_hook_context(snapshot: &mut ProviderSnapshot, session_id: Option<
 }
 
 pub fn overlay_store_context(snapshot: &mut ProviderSnapshot, session_id: Option<&str>) {
+    if !cursor_fs_access_allowed() {
+        return;
+    }
     let Ok(home) = cursor_data_home() else {
         return;
     };
@@ -1207,15 +1280,19 @@ fn overlay_hook_model_at(snapshot: &mut ProviderSnapshot, state: &Path, session_
     if is_auto_cursor_model(&hook_model) {
         return;
     }
-    let catalog_id = cursor_data_home()
-        .ok()
-        .and_then(|home| read_bounded_json(&home.join("cli-config.json")))
-        .as_ref()
-        .and_then(|config| config.get("model"))
-        .and_then(|model| json_text(model.get("modelId")));
-    let name = cursor_data_home()
-        .ok()
-        .and_then(|home| display_name_for_id(&home, &hook_model, catalog_id.as_deref()));
+    let name = if cursor_fs_access_allowed() {
+        let catalog_id = cursor_data_home()
+            .ok()
+            .and_then(|home| read_bounded_json(&home.join("cli-config.json")))
+            .as_ref()
+            .and_then(|config| config.get("model"))
+            .and_then(|model| json_text(model.get("modelId")));
+        cursor_data_home()
+            .ok()
+            .and_then(|home| display_name_for_id(&home, &hook_model, catalog_id.as_deref()))
+    } else {
+        None
+    };
     snapshot.session_models.insert(
         session_id.to_string(),
         name.unwrap_or_else(|| friendly_cursor_model_label(&hook_model)),
@@ -1453,6 +1530,7 @@ mod tests {
         std::env::remove_var("CURSOR_HOME");
         std::env::remove_var("CURSOR_AUTH_FILE");
         std::env::remove_var("CURSOR_STATE_DB");
+        std::env::remove_var("HERDR_PLUGIN_STATE_DIR");
         std::env::remove_var("HERDR_AGENT_QUOTA_SECURITY_BIN");
         std::env::remove_var("AGENT_CLI_CREDENTIAL_STORE");
     }
@@ -1753,12 +1831,107 @@ mod tests {
         let dir = tempdir().unwrap();
         isolate_cursor_identity(dir.path());
         write_cli_auth_info(dir.path());
-        write_security_stub(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'keychain-token'\n");
+        let log = dir.path().join("calls.log");
+        write_security_stub(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\necho called >> '{}'\nprintf '%s\\n' 'keychain-token'\n",
+                log.display()
+            ),
+        );
+        fs::write(
+            dir.path().join("auth.json"),
+            r#"{"accessToken":"file-token"}"#,
+        )
+        .unwrap();
         write_state_db(&dir.path().join("state.vscdb"), "ide-token");
         std::env::set_var("AGENT_CLI_CREDENTIAL_STORE", "file");
         let credentials = read_credentials().unwrap();
         clear_cursor_identity();
-        assert_eq!(credentials.access_token, "ide-token");
+        assert_eq!(credentials.access_token, "file-token");
+        assert!(
+            !log.exists(),
+            "file store must not spawn security even when a CLI login exists"
+        );
+    }
+
+    #[test]
+    fn a_cli_login_with_file_store_does_not_borrow_the_ide_token() {
+        let _guard = env_guard();
+        let dir = tempdir().unwrap();
+        isolate_cursor_identity(dir.path());
+        write_cli_auth_info(dir.path());
+        write_security_stub(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'keychain-token'\n");
+        write_state_db(&dir.path().join("state.vscdb"), "ide-token");
+        std::env::set_var("AGENT_CLI_CREDENTIAL_STORE", "file");
+        let error = read_credentials().unwrap_err();
+        clear_cursor_identity();
+        assert!(
+            matches!(error, ProviderError::Unavailable(ref message) if message.contains("keychain-approve")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn macos_does_not_open_cursor_app_support_without_cursor_state_db() {
+        let _guard = env_guard();
+        let dir = tempdir().unwrap();
+        isolate_cursor_identity(dir.path());
+        std::env::remove_var("CURSOR_STATE_DB");
+        write_security_stub(dir.path(), "#!/bin/sh\nexit 44\n");
+        let path = state_db_path();
+        let error = read_credentials().unwrap_err();
+        clear_cursor_identity();
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(path, None, "default macOS IDE db would prompt Ghostty TCC");
+            assert!(
+                matches!(error, ProviderError::MissingCredentials),
+                "{error:?}"
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(
+                path.as_ref().is_none_or(|path| !path
+                    .components()
+                    .any(|part| part.as_os_str() == "Application Support")),
+                "{path:?}"
+            );
+            let _ = error;
+        }
+    }
+
+    #[test]
+    fn macos_skips_dot_cursor_files_without_explicit_env() {
+        let _guard = env_guard();
+        let dir = tempdir().unwrap();
+        isolate_cursor_identity(dir.path());
+        std::env::remove_var("CURSOR_HOME");
+        std::env::remove_var("CURSOR_AUTH_FILE");
+        std::env::remove_var("CURSOR_STATE_DB");
+        std::env::set_var("HERDR_PLUGIN_STATE_DIR", dir.path());
+        fs::write(dir.path().join("cursor-keychain-approved"), "1").unwrap();
+        write_security_stub(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'keychain-token'\n");
+        write_cli_auth_info(dir.path());
+        write_state_db(&dir.path().join("state.vscdb"), "ide-token");
+        #[cfg(target_os = "macos")]
+        {
+            assert!(
+                !cursor_fs_access_allowed(),
+                "default ~/.cursor reads prompt Ghostty TCC"
+            );
+            let credentials = read_credentials().unwrap();
+            assert_eq!(credentials.access_token, "keychain-token");
+            let mut snapshot = ProviderSnapshot::new(Provider::Cursor, vec![], 1);
+            overlay_store_context(&mut snapshot, Some("00000000-0000-0000-0000-000000000001"));
+            assert!(snapshot.session_contexts.is_empty());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(cursor_fs_access_allowed());
+        }
+        clear_cursor_identity();
     }
 
     #[test]
