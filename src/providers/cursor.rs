@@ -291,9 +291,16 @@ pub fn current_account_id() -> Option<String> {
     Some(account_pin(&read_credentials().ok()?.access_token))
 }
 
-/// mtime of the CLI auth file only. The IDE database is written constantly
-/// and must not bust a still-valid snapshot.
+/// Credential-change signal for the cache gate.
+///
+/// The IDE database is written constantly and must not bust a still-valid
+/// snapshot. On macOS without `$CURSOR_*` opt-in the auth file lives under
+/// provenance-tagged `~/.cursor`; a `stat` there is enough for Ghostty
+/// `SystemPolicyAppData`. Use the plugin-state Keychain marker instead.
 pub fn auth_mtime_unix() -> Option<u64> {
+    if !cursor_fs_access_allowed() {
+        return keychain_approval_mtime();
+    }
     CacheStore::file_mtime_unix(&auth_path().ok()?)
 }
 
@@ -1923,6 +1930,13 @@ mod tests {
             );
             let credentials = read_credentials().unwrap();
             assert_eq!(credentials.access_token, "keychain-token");
+            let marker_mtime =
+                CacheStore::file_mtime_unix(&dir.path().join("cursor-keychain-approved"));
+            assert_eq!(
+                auth_mtime_unix(),
+                marker_mtime,
+                "watch ticks must not stat ~/.cursor/auth.json"
+            );
             let mut snapshot = ProviderSnapshot::new(Provider::Cursor, vec![], 1);
             overlay_store_context(&mut snapshot, Some("00000000-0000-0000-0000-000000000001"));
             assert!(snapshot.session_contexts.is_empty());

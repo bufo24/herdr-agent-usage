@@ -15,10 +15,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carry Cursor `com.apple.provenance`; this plugin is ad-hoc signed, so each
   event/watch/hook process was prompting Ghostty `SystemPolicyAppData`
   ("would like to access data from other apps"). Credentials stay on Keychain;
-  model/cache/context stay on the hook mailbox. The Keychain approval marker
-  moves to plugin state (`cursor-keychain-approved`); configure copies a
-  legacy `~/.cursor/.herdr-keychain-approved` once. A CLI login never falls
-  through to the IDE token, including `AGENT_CLI_CREDENTIAL_STORE=file`.
+  model/cache/context stay on the hook mailbox. The cache identity mtime is
+  the plugin-state Keychain marker, not a `stat` of `~/.cursor/auth.json` —
+  that leftover watch-tick was enough to keep the dialog after file reads
+  were already gated. The Keychain approval marker moves to plugin state
+  (`cursor-keychain-approved`); configure copies a legacy
+  `~/.cursor/.herdr-keychain-approved` once. A CLI login never falls through
+  to the IDE token, including `AGENT_CLI_CREDENTIAL_STORE=file`.
 
 ### Added
 
