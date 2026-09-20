@@ -1285,7 +1285,7 @@ fn group_head_pane_ids(
         };
         let candidate = (stack, headroom, index, pane.pane_id.clone());
         match heads.get(&pane.workspace_id) {
-            Some(current) if *current <= candidate => {}
+            Some(current) if current <= &candidate => {}
             _ => {
                 heads.insert(pane.workspace_id.clone(), candidate);
             }
