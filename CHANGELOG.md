@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Running the integration suite from a Herdr pane no longer disrupts the
+  current Agent view or temporarily puts a Space header between its own agents.
 - Forced quota refresh restores the Agent view. Herdr drops a plugin-owned
   view on disable, and enable does not run startup, so Space grouping fell
   back to native `grouped` until the next server restart. Event/focus/watch

@@ -50,6 +50,7 @@ esac
     }
     let output = Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
+        .env_remove("HERDR_SOCKET_PATH")
         .env(
             "PATH",
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
@@ -130,6 +131,7 @@ esac
     let output = Command::new("bash")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh"))
         .args(["--agent", "claude,codex,grok,agy,opencode,pi,omp,devin"])
+        .env_remove("HERDR_SOCKET_PATH")
         .env(
             "PATH",
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
