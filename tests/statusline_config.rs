@@ -178,6 +178,7 @@ fn repair_migrates_a_previous_backup_from_the_old_state_directory() {
 fn direct_configuration_write_refuses_an_ambiguous_cache_directory() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
         .args(["configure", "--apply"])
+        .env_remove("HERDR_SOCKET_PATH")
         .env_remove("HERDR_PLUGIN_STATE_DIR")
         .output()
         .unwrap();

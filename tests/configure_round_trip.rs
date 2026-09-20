@@ -3,13 +3,22 @@ use herdr_agent_quota::cli::AgentSelection;
 use herdr_agent_quota::configure::herdr::{add_quota_row, remove_quota_row};
 use herdr_agent_quota::model::{Harness, Provider, ProviderSnapshot, UsageWindow, WindowKind};
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
+
+fn isolated_plugin_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"));
+    command.env_remove("HERDR_SOCKET_PATH");
+    command
+}
 
 fn sidebar_has_status_icon_rules(sidebar: &str) -> bool {
     sidebar.contains("$quota_icon")
@@ -79,7 +88,7 @@ fn run_claude_collector_with_config_dir(
     input: &[u8],
     config_dir: Option<&Path>,
 ) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"));
+    let mut command = isolated_plugin_command();
     command
         .arg("claude-statusline")
         .env("HERDR_PLUGIN_STATE_DIR", state)
@@ -95,7 +104,7 @@ fn run_claude_collector_with_config_dir(
 }
 
 fn run_claude_collector_with_timeout(state: &Path, input: &[u8], timeout: Duration) -> bool {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut child = isolated_plugin_command()
         .arg("claude-statusline")
         .env("HERDR_PLUGIN_STATE_DIR", state)
         .stdin(Stdio::piped())
@@ -151,7 +160,7 @@ fn pin_compact_layout(state: &Path) {
 
 fn run_claude_refresh(state: &Path, herdr: &Path) {
     pin_compact_layout(state);
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .args(["refresh", "--provider", "claude", "--force"])
         .env("HERDR_PLUGIN_STATE_DIR", state)
         .env("HERDR_BIN_PATH", herdr)
@@ -531,7 +540,7 @@ fn sidebar_configuration_keeps_plugin_owned_gap_packed() {
 #[test]
 fn claude_collector_is_silent_without_a_previous_statusline() {
     let state = tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut child = isolated_plugin_command()
         .arg("claude-statusline")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .stdin(Stdio::piped())
@@ -588,7 +597,7 @@ fn claude_collector_bounds_a_hanging_previous_statusline() {
 #[test]
 fn agy_collector_is_silent_without_a_previous_statusline() {
     let state = tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut child = isolated_plugin_command()
         .arg("agy-statusline")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .stdin(Stdio::piped())
@@ -952,7 +961,7 @@ fn a_scrolled_pane_completion_reports_only_icon_tokens() {
     )
     .unwrap();
     chmod_exec(&herdr);
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -993,7 +1002,7 @@ fn focus_paints_icons_without_reading_the_pane_or_collectors() {
     permissions.set_mode(0o755);
     fs::set_permissions(&herdr, permissions).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1056,7 +1065,7 @@ fn agent_event_refreshes_and_reads_topics_only_for_its_provider() {
         include_bytes!("fixtures/claude/statusline-both.json"),
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1137,7 +1146,7 @@ fn run_event_binary_with_xdg(
     xdg_data_home: &Path,
 ) -> std::process::Output {
     pin_compact_layout(state);
-    Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state)
         .env("HERDR_BIN_PATH", herdr)
@@ -1354,7 +1363,7 @@ fn focus_event_uses_its_pane_even_when_the_current_focus_differs() {
             original_four_inventory_with_working_codex(),
             Some(r#"{"result":{"pane":{"agent":"codex","pane_id":"w1:p2"}}}"#),
         );
-        let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+        let output = isolated_plugin_command()
             .arg("focus")
             .env("HERDR_PLUGIN_STATE_DIR", state.path())
             .env("HERDR_BIN_PATH", &herdr)
@@ -1411,7 +1420,7 @@ fn workspace_focus_uses_that_workspaces_layout_and_keeps_other_green_panes() {
     .unwrap();
     drop(script);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1448,7 +1457,7 @@ fn workspace_focus_uses_that_workspaces_layout_and_keeps_other_green_panes() {
 
     fs::write(state.path().join("icon-attention.json"), initial_attention).unwrap();
     fs::remove_file(&herdr_log).unwrap();
-    let tab_output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let tab_output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1498,7 +1507,7 @@ fn delayed_workspace_focus_does_not_repaint_a_green_pane() {
     )
     .unwrap();
     drop(script);
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1546,7 +1555,7 @@ fn watcher_acknowledges_focus_change_even_without_a_focus_event() {
     )
     .unwrap();
     drop(script);
-    let mut watcher = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut watcher = isolated_plugin_command()
         .args([
             "watch",
             "--provider",
@@ -1619,7 +1628,7 @@ fn watcher_keeps_a_focused_completion_green_until_focus_moves() {
     )
     .unwrap();
     drop(script);
-    let mut watcher = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut watcher = isolated_plugin_command()
         .args([
             "watch",
             "--provider",
@@ -1696,7 +1705,7 @@ fn focusing_a_done_pane_clears_the_teal_icon_immediately() {
         inventory,
         Some(r#"{"result":{"pane":{"agent":"grok","pane_id":"w1:p2"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1754,7 +1763,7 @@ fn focusing_a_green_pane_clears_it_even_if_inventory_still_says_working() {
         inventory,
         Some(r#"{"result":{"pane":{"agent":"cursor","pane_id":"w1:p1"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1812,7 +1821,7 @@ fn focus_change_clears_only_the_previous_green_pane() {
         inventory,
         Some(r#"{"result":{"pane":{"agent":"grok","pane_id":"w1:p2"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1879,7 +1888,7 @@ fn focus_to_a_non_agent_pane_acknowledges_the_previous_agent() {
          "tokens":{"quota_icon_done":"GREEN"}}
     ]}}"#;
     let (herdr, herdr_log, _, _) = install_logged_herdr_and_codex(state.path(), inventory, None);
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1918,7 +1927,7 @@ fn completion_stays_teal_even_when_the_pane_was_already_focused() {
         // Deliberately lie like production: pane current == event pane.
         Some(r#"{"result":{"pane":{"agent":"cursor","pane_id":"w1:p2"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -1974,7 +1983,7 @@ fn completion_stays_teal_even_when_the_pane_was_already_focused() {
         inventory,
         Some(r#"{"result":{"pane":{"agent":"cursor","pane_id":"w1:p1"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -2036,7 +2045,7 @@ fn unfocused_idle_uses_working_set_when_the_yellow_icon_is_gone() {
         inventory,
         Some(r#"{"result":{"pane":{"agent":"cursor","pane_id":"w1:p2"}}}"#),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -2083,7 +2092,7 @@ fn focus_on_an_opencode_pane_does_not_refresh_collectors() {
         Some(r#"{"result":{"pane":{"agent":"opencode","pane_id":"w1:p9"}}}"#),
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .arg("focus")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -2450,10 +2459,13 @@ impl AgentHomes {
 
     fn configure_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
         fs::create_dir_all(&self.state).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"));
+        let mut command = isolated_plugin_command();
         for (key, value) in env {
             command.env(key, value);
         }
+        // These are integration-test inputs, never authority to mutate the
+        // Herdr session from which `cargo test` happened to be launched.
+        command.env_remove("HERDR_SOCKET_PATH");
         command
             .arg("configure")
             .args(args)
@@ -2480,6 +2492,57 @@ impl AgentHomes {
     fn sidebar(&self) -> String {
         fs::read_to_string(&self.herdr_config).unwrap_or_default()
     }
+}
+
+#[test]
+fn configure_tests_do_not_reach_the_callers_live_herdr_socket() {
+    let root = tempdir().unwrap();
+    let socket = root.path().join("live-herdr.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop);
+    let server = thread::spawn(move || loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut request)
+                    .unwrap();
+                writeln!(
+                    stream,
+                    r#"{{"result":{{"type":"agent_view","active":true}}}}"#
+                )
+                .unwrap();
+                return Some(request);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if server_stop.load(Ordering::Relaxed) {
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("accept fake Herdr socket: {error}"),
+        }
+    });
+
+    let homes = AgentHomes::new(root.path());
+    let output = homes.configure_with_env(
+        &["--apply", "--agent", "pi"],
+        &[("HERDR_SOCKET_PATH", socket.to_str().unwrap())],
+    );
+    stop.store(true, Ordering::Relaxed);
+    let request = server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        request, None,
+        "an integration test changed the live Agent view: {request:?}"
+    );
 }
 
 #[test]
@@ -2689,7 +2752,7 @@ fn cursor_collector_hooks_preserve_herdr_session_start() {
 #[test]
 fn cursor_hooks_command_writes_a_session_mailbox() {
     let state = tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let mut child = isolated_plugin_command()
         .arg("cursor-hooks")
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .stdin(Stdio::piped())
@@ -3211,7 +3274,7 @@ fn run_pi_event(
     pi_sessions: &Path,
 ) -> std::process::Output {
     pin_compact_layout(state);
-    Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    isolated_plugin_command()
         .arg("event")
         .env("HERDR_PLUGIN_STATE_DIR", state)
         .env("HERDR_BIN_PATH", herdr)
@@ -3656,7 +3719,7 @@ fn a_manual_refresh_reads_no_pane_at_all() {
     let (herdr, herdr_log, codex, _codex_log) =
         install_logged_herdr_and_codex(state.path(), &inventory, None);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .args(["refresh", "--provider", "all"])
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
@@ -3698,7 +3761,7 @@ fn a_quota_less_pane_still_gets_its_brand_icon_on_refresh() {
     let state = tempdir().unwrap();
     let inventory = r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","agent_status":"idle","tokens":{}}]}}"#;
     let (herdr, herdr_log, _, _) = install_logged_herdr_and_codex(state.path(), inventory, None);
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+    let output = isolated_plugin_command()
         .args(["refresh", "--provider", "claude"])
         .env("HERDR_PLUGIN_STATE_DIR", state.path())
         .env("HERDR_BIN_PATH", &herdr)
