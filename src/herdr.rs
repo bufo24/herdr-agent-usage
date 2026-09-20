@@ -2674,14 +2674,9 @@ mod tests {
         // Default order follows Herdr's inventory/layout order, even when a
         // later pane has less quota remaining.
         let reversed = vec![sibling.clone(), head.clone()];
-        let default_heads =
-            group_head_pane_ids(&reversed, &[], &[], false, &BTreeSet::new());
-        assert_eq!(
-            default_heads.get("w1").map(String::as_str),
-            Some("w1:p2")
-        );
-        let quota_heads =
-            group_head_pane_ids(&reversed, &[], &[], true, &BTreeSet::new());
+        let default_heads = group_head_pane_ids(&reversed, &[], &[], false, &BTreeSet::new());
+        assert_eq!(default_heads.get("w1").map(String::as_str), Some("w1:p2"));
+        let quota_heads = group_head_pane_ids(&reversed, &[], &[], true, &BTreeSet::new());
         assert_eq!(quota_heads.get("w1").map(String::as_str), Some("w1:p1"));
 
         // Equal headroom keeps Herdr's stable inventory order instead of
@@ -2692,8 +2687,7 @@ mod tests {
             .tokens
             .insert(HEADROOM_TOKEN.to_string(), "016".to_string());
         let equal_inventory = vec![sibling.clone(), equal];
-        let equal_heads =
-            group_head_pane_ids(&equal_inventory, &[], &[], true, &BTreeSet::new());
+        let equal_heads = group_head_pane_ids(&equal_inventory, &[], &[], true, &BTreeSet::new());
         assert_eq!(equal_heads.get("w1").map(String::as_str), Some("w1:p2"));
 
         let labels = BTreeMap::from([("w1".to_string(), "ifs".to_string())]);
