@@ -235,11 +235,12 @@ same numbers the CLI footer prints (`Auto · 8.1%`). Only that protobuf field
 is read. Cache still comes from the hooks; `context_usage_percent` wins when
 present, otherwise last `input_tokens` against `context_window_size`,
 Composer 2.x's documented 200k window, or Auto/`default`'s 256k window.
-`configure` writes `herdr-agent-quota-hooks.sh` next to `hooks.json` and
-merges `bash '<script>'` into `afterAgentResponse`, `stop`, and `preCompact`.
-It never replaces Herdr's `sessionStart`. Cursor CLI loads user hooks at
-session start, so an already-running pane must be restarted. Do not install a
-Cursor `statusLine` — that setting replaces the native CLI footer. Cursor publishes no prompt-cache lifetime, so there is
+`configure` writes `herdr-agent-quota-hooks.sh` under plugin state — not
+next to `hooks.json`. `bash ~/.cursor/…` is a Ghostty-attributed open of
+Cursor-provenance files and prompts twice per turn (`afterAgentResponse`
+then `stop`). It never replaces Herdr's `sessionStart`. Cursor CLI loads user
+hooks at session start, so an already-running pane must be restarted. Do not
+install a Cursor `statusLine` — that setting replaces the native CLI footer. Cursor publishes no prompt-cache lifetime, so there is
 no TTL. Cache identity is `sha256("cursor\0" || token)`.
 
 ## Herdr state this plugin owns outside a pane
@@ -257,8 +258,11 @@ one, and setting it replaces the user's own `ui.agent_panel_sort`. Rules:
    further and does not call clear at all when the order is `default` — there
    is nothing of ours to restore, and silence is the only way to be sure a
    foreign view survives.
-2. **Re-apply it from `startup`, never from `refresh`.** `refresh` runs on
-   every event path; the view only needs putting back when the server restarted.
+2. **Re-apply it from `startup` and a forced refresh, never from event.**
+   Herdr drops a plugin-owned view on disable; enable does not run startup.
+   The refresh action (`--force`) is the same repair that respawns the
+   watcher. Event/focus/watch stay off this path so a turn does not spend a
+   socket call.
 3. It is the only thing in the plugin that speaks the raw socket protocol
    (`HERDR_SOCKET_PATH`), because `agent.view.*` has no CLI subcommand in
    Herdr 0.8. One request, one reply, one connection — nothing subscribes, so

@@ -2662,13 +2662,19 @@ fn cursor_collector_hooks_preserve_herdr_session_start() {
     assert!(hooks.contains("herdr-agent-quota-hooks.sh"));
     assert!(hooks.contains("afterAgentResponse"));
     assert!(hooks.contains("preCompact"));
-    let script = homes
+    let script = homes.state.join("herdr-agent-quota-hooks.sh");
+    let leftover = homes
         .cursor_hooks
         .parent()
         .unwrap()
         .join("herdr-agent-quota-hooks.sh");
+    assert!(!leftover.exists(), "{leftover:?}");
     let script_text = fs::read_to_string(&script).unwrap();
     assert!(script_text.contains("cursor-hooks"));
+    assert!(
+        hooks.contains(homes.state.to_str().unwrap()),
+        "wrapper must run from plugin state, not ~/.cursor: {hooks}"
+    );
 
     assert!(homes
         .configure(&["--uninstall", "--agent", "cursor"])

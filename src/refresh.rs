@@ -83,16 +83,11 @@ pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
 
 /// Restore the Herdr state this plugin owns, then refresh once.
 ///
-/// Only the agent order is restored, and only when it is this plugin's to
-/// restore: a `default` order owns no Herdr view, so startup has nothing to
-/// put back and must not spend a socket call saying so.
+/// Forced refresh restores the Agent view: Herdr drops a plugin-owned view
+/// on disable, and enable does not run startup. Event/focus/watch must not
+/// spend a socket call on every turn. A `default` order owns no view, so
+/// nothing is put back.
 pub fn startup(providers: &[Provider]) -> Result<()> {
-    if let Ok(cache) = CacheStore::from_env() {
-        let order = crate::configure::resolved_agent_order(None, Some(&cache));
-        if order.is_quota() {
-            crate::configure::apply_agent_order(order);
-        }
-    }
     // Handoff need not emit another idle -> working event. An existing
     // watcher adopts the saved environment; otherwise this starts one.
     run(providers, true, false)?;
@@ -396,6 +391,9 @@ fn run_internal(
 ) -> Result<()> {
     let cache = CacheStore::from_env()?;
     WatchHerdrEnvironment::current().save(&cache)?;
+    if force {
+        restore_quota_agent_view(&cache);
+    }
     // Agent inventory is metadata-only. Reusing it for both the fetch and the
     // publish pass lets local Codex/Grok diagnostics target the exact pane
     // sessions without adding another Herdr call or reading any pane output.
@@ -425,6 +423,16 @@ fn run_internal(
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
     Ok(())
+}
+
+/// Herdr drops `plugin:herdr-agent-quota`'s Agent view on disable. Enable
+/// does not run startup, so a forced refresh is the repair that also
+/// respawns the watcher. Event/focus/watch ticks stay off this path.
+fn restore_quota_agent_view(cache: &CacheStore) {
+    let order = crate::configure::resolved_agent_order(None, Some(cache));
+    if order.is_quota() {
+        crate::configure::apply_agent_order(order);
+    }
 }
 
 pub fn event() -> Result<()> {
