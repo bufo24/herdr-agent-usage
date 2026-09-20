@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Forced quota refresh restores the Agent view. Herdr drops a plugin-owned
+  view on disable, and enable does not run startup, so Space grouping fell
+  back to native `grouped` until the next server restart. Event/focus/watch
+  still do not touch the view.
+- The Cursor hook wrapper lives in plugin state instead of `~/.cursor`.
+  `afterAgentResponse` and `stop` each spawned `bash` against a
+  Cursor-provenance path, so Ghostty prompted `SystemPolicyAppData` twice
+  per turn. Restart an already-running Cursor pane after configure so it
+  reloads `hooks.json`.
+
 - macOS no longer opens Cursor.app's `~/Library/Application Support/Cursor/…/state.vscdb`
   unless `$CURSOR_STATE_DB` is set, and Herdr-spawned processes no longer read
   `~/.cursor` (chats `store.db`, `cli-config.json`, `auth.json`) unless

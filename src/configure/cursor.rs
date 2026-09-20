@@ -4,6 +4,12 @@
 //! `afterAgentResponse`, `stop`, and `preCompact`, and never replaces or
 //! removes a sessionStart entry. A Cursor `statusLine` is not installed: that
 //! setting replaces the native CLI footer.
+//!
+//! The wrapper script lives in plugin state, not next to `hooks.json`.
+//! `bash ~/.cursor/herdr-agent-quota-hooks.sh` is a Ghostty-attributed open of
+//! a Cursor-provenance tree and prompts `SystemPolicyAppData` twice per turn
+//! (`afterAgentResponse` then `stop`). `hooks.json` itself stays where Cursor
+//! CLI reads it.
 
 use crate::cache::CacheStore;
 use crate::providers::cursor;
@@ -41,13 +47,18 @@ pub fn apply() -> Result<()> {
 }
 
 pub fn uninstall() -> Result<()> {
-    uninstall_at(&hooks_path()?)
+    let cache = CacheStore::from_env()?;
+    uninstall_at(&hooks_path()?, cache.root())
 }
 
 pub fn apply_at(path: &Path, state: &Path, executable: &Path) -> Result<()> {
     crate::providers::cursor::migrate_legacy_keychain_marker(state);
-    let script = script_path(path);
+    let script = state.join(SCRIPT_NAME);
     write_wrapper_script(&script, state, executable)?;
+    let leftover = legacy_script_path(path);
+    if leftover != script {
+        remove_wrapper_script(&leftover);
+    }
     let command = wrapper_command(&script);
     let mut root = read_hooks(path)?;
     let Some(hooks) = hooks_object_mut(&mut root)? else {
@@ -59,8 +70,9 @@ pub fn apply_at(path: &Path, state: &Path, executable: &Path) -> Result<()> {
     write_hooks(path, &root)
 }
 
-pub fn uninstall_at(path: &Path) -> Result<()> {
-    remove_wrapper_script(&script_path(path));
+pub fn uninstall_at(path: &Path, state: &Path) -> Result<()> {
+    remove_wrapper_script(&state.join(SCRIPT_NAME));
+    remove_wrapper_script(&legacy_script_path(path));
     if !path.exists() {
         return Ok(());
     }
@@ -112,7 +124,7 @@ pub(crate) fn hooks_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".cursor/hooks.json"))
 }
 
-fn script_path(hooks: &Path) -> PathBuf {
+fn legacy_script_path(hooks: &Path) -> PathBuf {
     hooks
         .parent()
         .map(|parent| parent.join(SCRIPT_NAME))
@@ -278,7 +290,10 @@ mod tests {
     #[test]
     fn apply_merges_collector_hooks_without_touching_session_start() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("hooks.json");
+        let home = dir.path().join("cursor-home");
+        let state = dir.path().join("plugin-state");
+        let path = home.join("hooks.json");
+        fs::create_dir_all(&home).unwrap();
         fs::write(
             &path,
             r#"{
@@ -289,19 +304,24 @@ mod tests {
 }"#,
         )
         .unwrap();
-        apply_at(&path, dir.path(), Path::new("/opt/herdr-agent-quota")).unwrap();
+        apply_at(&path, &state, Path::new("/opt/herdr-agent-quota")).unwrap();
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let session = &value["hooks"]["sessionStart"][0]["command"];
         assert_eq!(session, "bash '/tmp/herdr-agent-state.sh' session");
-        let script = dir.path().join(SCRIPT_NAME);
-        let script_text = fs::read_to_string(&script).unwrap();
+        assert!(
+            !home.join(SCRIPT_NAME).exists(),
+            "bash ~/.cursor/hook.sh prompts Ghostty TCC twice per turn"
+        );
+        let script_text = fs::read_to_string(state.join(SCRIPT_NAME)).unwrap();
         assert!(script_text.contains("HERDR_PLUGIN_STATE_DIR="));
         assert!(script_text.contains("/opt/herdr-agent-quota"));
         assert!(script_text.contains(MANAGED_SUBCOMMAND));
         for event in HOOK_EVENTS {
             let command = value["hooks"][event][0]["command"].as_str().unwrap();
             assert!(command.contains("bash"));
+            assert!(command.contains(state.to_str().unwrap()));
             assert!(command.contains(SCRIPT_NAME));
+            assert!(!command.contains("cursor-home"));
             assert!(!command.contains("HERDR_PLUGIN_STATE_DIR="));
         }
     }
@@ -322,7 +342,8 @@ mod tests {
 }"#,
         )
         .unwrap();
-        apply_at(&path, dir.path(), Path::new("/new/herdr-agent-quota")).unwrap();
+        let state = dir.path().join("plugin-state");
+        apply_at(&path, &state, Path::new("/new/herdr-agent-quota")).unwrap();
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let commands: Vec<&str> = value["hooks"]["afterAgentResponse"]
             .as_array()
@@ -333,8 +354,9 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0], "echo user");
         assert!(commands[1].contains(SCRIPT_NAME));
+        assert!(commands[1].contains("plugin-state"));
         assert!(!commands[1].contains("/old/herdr-agent-quota"));
-        let script_text = fs::read_to_string(dir.path().join(SCRIPT_NAME)).unwrap();
+        let script_text = fs::read_to_string(state.join(SCRIPT_NAME)).unwrap();
         assert!(script_text.contains("/new/herdr-agent-quota"));
     }
 
@@ -346,7 +368,7 @@ mod tests {
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["hooks"]["sessionStart"] = json!([{ "command": "herdr session" }]);
         fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-        uninstall_at(&path).unwrap();
+        uninstall_at(&path, dir.path()).unwrap();
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             value["hooks"]["sessionStart"][0]["command"],
@@ -364,8 +386,22 @@ mod tests {
         apply_at(&path, dir.path(), Path::new("/opt/herdr-agent-quota")).unwrap();
         let script = dir.path().join(SCRIPT_NAME);
         assert!(script.exists());
-        uninstall_at(&path).unwrap();
+        uninstall_at(&path, dir.path()).unwrap();
         assert!(!path.exists());
         assert!(!script.exists());
+    }
+
+    #[test]
+    fn apply_removes_a_legacy_wrapper_next_to_hooks_json() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("cursor-home");
+        let state = dir.path().join("plugin-state");
+        fs::create_dir_all(&home).unwrap();
+        let path = home.join("hooks.json");
+        let leftover = home.join(SCRIPT_NAME);
+        fs::write(&leftover, "# managed by herdr-agent-quota\ncursor-hooks\n").unwrap();
+        apply_at(&path, &state, Path::new("/opt/herdr-agent-quota")).unwrap();
+        assert!(!leftover.exists());
+        assert!(state.join(SCRIPT_NAME).is_file());
     }
 }
