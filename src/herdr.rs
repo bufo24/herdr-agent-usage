@@ -459,8 +459,11 @@ pub fn list_agent_state() -> Result<AgentState> {
     let value = list_agent_value()?;
     let mut panes = Vec::new();
     collect_agent_panes(&value, &mut panes);
-    panes.sort_by(|left, right| left.pane_id.cmp(&right.pane_id));
-    panes.dedup_by(|left, right| left.pane_id == right.pane_id);
+    // Preserve Herdr's inventory order: under the default grouped view this is
+    // the Agent panel's draw order. Lexical pane ids are not layout order
+    // (for example, p10 sorts before p7).
+    let mut seen = BTreeSet::new();
+    panes.retain(|pane| seen.insert(pane.pane_id.clone()));
     attach_muse_sessions(&mut panes);
     let mut working_pane_ids = Vec::new();
     collect_working_providers(&value, &mut Vec::new(), &mut working_pane_ids);
@@ -853,7 +856,14 @@ pub fn publish_icon_tokens(panes: &[AgentPane], sequence: u64) -> Result<()> {
         _ => panes.to_vec(),
     };
     let nesting = vendor_nesting(&inventory, panes, &[]);
-    let group_heads = group_head_pane_ids(&inventory, panes, &[], &BTreeSet::new());
+    let group_heads = group_head_pane_ids(
+        &inventory,
+        panes,
+        &[],
+        group_head_uses_quota_order(),
+        &nesting.stack,
+        &BTreeSet::new(),
+    );
     let wide = !identity_is_narrow(publish_content_width());
     let mut reported = 0;
     let mut failed = Vec::new();
@@ -903,7 +913,14 @@ fn publish_pane_tokens_inner(
         _ => panes.to_vec(),
     };
     let nesting = vendor_nesting(&inventory, panes, tokens);
-    let group_heads = group_head_pane_ids(&inventory, panes, tokens, &BTreeSet::new());
+    let group_heads = group_head_pane_ids(
+        &inventory,
+        panes,
+        tokens,
+        group_head_uses_quota_order(),
+        &nesting.stack,
+        &BTreeSet::new(),
+    );
     let wide = !identity_is_narrow(row.shape.content_width);
     let mut reported = 0usize;
     let mut failed = Vec::new();
@@ -1210,15 +1227,21 @@ fn collect_workspace_labels(value: &Value, labels: &mut BTreeMap<String, String>
 
 /// Which pane carries the group header for each workspace.
 ///
-/// Under quota order the view sorts by `workspace_order` then headroom, so the
-/// tightest pane sits at the top of its Space — that is where the header must
-/// land. `inventory` is the full agent list; `publishing` / `tokens` overlay
-/// headroom for panes this pass is about to write so a forced refresh that
-/// moves the title does not leave the old head labelled.
+/// The header must sit on whichever pane Herdr draws first in the Space.
+/// Under Herdr's default grouped order, `inventory` already follows layout
+/// order, so the first eligible pane wins. Under this plugin's quota view,
+/// Herdr sorts by `quota_stack` and then `quota_headroom`; exact ties keep
+/// inventory order because the sort is stable. `quota_stack` is the overlay-
+/// aware map produced by `vendor_nesting`, so same-vendor heads stay ahead
+/// of their children just as they do in the Agent panel. `publishing` /
+/// `tokens` overlay headroom for panes this pass is about to write so a
+/// forced refresh can move the header atomically.
 fn group_head_pane_ids(
     inventory: &[AgentPane],
     publishing: &[AgentPane],
     tokens: &[PaneTokens],
+    quota_order: bool,
+    quota_stack: &BTreeMap<String, String>,
     vendor_heads: &BTreeSet<String>,
 ) -> BTreeMap<String, String> {
     let publishing_ids = publishing
@@ -1233,15 +1256,17 @@ fn group_head_pane_ids(
                 .iter()
                 .any(|pane| pane.workspace_id == workspace && !vendor_heads.contains(&pane.pane_id))
     };
-    let mut heads: BTreeMap<String, (u8, &str)> = BTreeMap::new();
-    for pane in inventory {
+    let mut heads: BTreeMap<String, (String, u8, usize, String)> = BTreeMap::new();
+    for (index, pane) in inventory.iter().enumerate() {
         if pane.workspace_id.is_empty() {
             continue;
         }
         if vendor_heads.contains(&pane.pane_id) && has_non_vendor_head(&pane.workspace_id) {
             continue;
         }
-        let headroom = if publishing_ids.contains(pane.pane_id.as_str()) {
+        let headroom = if !quota_order {
+            0
+        } else if publishing_ids.contains(pane.pane_id.as_str()) {
             published_headroom(pane, tokens)
         } else {
             pane.tokens
@@ -1249,9 +1274,18 @@ fn group_head_pane_ids(
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(u8::MAX)
         };
-        let candidate = (headroom, pane.pane_id.as_str());
+        let stack = if quota_order {
+            quota_stack
+                .get(&pane.pane_id)
+                .cloned()
+                .or_else(|| pane.tokens.get(STACK_TOKEN).cloned())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let candidate = (stack, headroom, index, pane.pane_id.clone());
         match heads.get(&pane.workspace_id) {
-            Some(current) if *current <= candidate => {}
+            Some(current) if current <= &candidate => {}
             _ => {
                 heads.insert(pane.workspace_id.clone(), candidate);
             }
@@ -1259,19 +1293,48 @@ fn group_head_pane_ids(
     }
     // A pane present only in this pass (inventory read failed) still needs a
     // head entry so its Space is not left without a label.
-    for pane in publishing {
+    for (index, pane) in publishing.iter().enumerate() {
         if pane.workspace_id.is_empty() || heads.contains_key(&pane.workspace_id) {
             continue;
         }
+        let headroom = if quota_order {
+            published_headroom(pane, tokens)
+        } else {
+            0
+        };
+        let stack = if quota_order {
+            quota_stack
+                .get(&pane.pane_id)
+                .cloned()
+                .or_else(|| pane.tokens.get(STACK_TOKEN).cloned())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         heads.insert(
             pane.workspace_id.clone(),
-            (published_headroom(pane, tokens), pane.pane_id.as_str()),
+            (
+                stack,
+                headroom,
+                inventory.len() + index,
+                pane.pane_id.clone(),
+            ),
         );
     }
     heads
         .into_iter()
-        .map(|(workspace, (_, pane_id))| (workspace, pane_id.to_string()))
+        .map(|(workspace, (_, _, _, pane_id))| (workspace, pane_id))
         .collect()
+}
+
+/// Whether the Agent panel is under this plugin's quota-ranked view.
+///
+/// With `agent-order default`, Herdr owns the ordering and group headers must
+/// follow the inventory/layout order. With `quota`, header election must use
+/// the same `quota_stack` then `quota_headroom` keys as the Agent view.
+fn group_head_uses_quota_order() -> bool {
+    let cache = crate::cache::CacheStore::from_env().ok();
+    crate::configure::resolved_agent_order(None, cache.as_ref()).is_quota()
 }
 
 fn published_headroom(pane: &AgentPane, tokens: &[PaneTokens]) -> u8 {
@@ -2629,13 +2692,104 @@ mod tests {
             focused: false,
         };
         let inventory = vec![head.clone(), sibling.clone()];
+        let nesting = vendor_nesting(&inventory, std::slice::from_ref(&sibling), &[]);
         let heads = group_head_pane_ids(
             &inventory,
             std::slice::from_ref(&sibling),
             &[],
+            true,
+            &nesting.stack,
             &BTreeSet::new(),
         );
         assert_eq!(heads.get("w1").map(String::as_str), Some("w1:p1"));
+
+        // Default order follows Herdr's inventory/layout order, even when a
+        // later pane has less quota remaining.
+        let reversed = vec![sibling.clone(), head.clone()];
+        let reversed_nesting = vendor_nesting(&reversed, &[], &[]);
+        let default_heads = group_head_pane_ids(
+            &reversed,
+            &[],
+            &[],
+            false,
+            &reversed_nesting.stack,
+            &BTreeSet::new(),
+        );
+        assert_eq!(default_heads.get("w1").map(String::as_str), Some("w1:p2"));
+        let quota_heads = group_head_pane_ids(
+            &reversed,
+            &[],
+            &[],
+            true,
+            &reversed_nesting.stack,
+            &BTreeSet::new(),
+        );
+        assert_eq!(quota_heads.get("w1").map(String::as_str), Some("w1:p1"));
+
+        // Exact quota-sort ties keep Herdr's stable inventory order. Use
+        // non-nested harnesses so quota_stack is identical for both panes.
+        let mut stable_first = sibling.clone();
+        stable_first.harness = Harness::Claude;
+        let mut stable_late = head.clone();
+        stable_late.pane_id = "w1:p10".to_string();
+        stable_late.harness = Harness::Agy;
+        stable_late
+            .tokens
+            .insert(HEADROOM_TOKEN.to_string(), "016".to_string());
+        let equal_inventory = vec![stable_first, stable_late];
+        let equal_nesting = vendor_nesting(&equal_inventory, &[], &[]);
+        let equal_heads = group_head_pane_ids(
+            &equal_inventory,
+            &[],
+            &[],
+            true,
+            &equal_nesting.stack,
+            &BTreeSet::new(),
+        );
+        assert_eq!(equal_heads.get("w1").map(String::as_str), Some("w1:p2"));
+
+        // Same-vendor equal-headroom panes are not an exact sort tie:
+        // quota_stack deliberately puts the stable vendor head before its
+        // child. That can differ from inventory order (p10 sorts before p7).
+        let mut layout_first = sibling.clone();
+        layout_first.pane_id = "w1:p7".to_string();
+        layout_first.harness = Harness::Cursor;
+        layout_first
+            .tokens
+            .insert(HEADROOM_TOKEN.to_string(), "016".to_string());
+        let mut vendor_head = sibling.clone();
+        vendor_head.pane_id = "w1:p10".to_string();
+        vendor_head.harness = Harness::Cursor;
+        vendor_head
+            .tokens
+            .insert(HEADROOM_TOKEN.to_string(), "016".to_string());
+        let vendor_inventory = vec![layout_first, vendor_head];
+        let vendor_nesting = vendor_nesting(&vendor_inventory, &[], &[]);
+        assert!(vendor_nesting.heads.contains("w1:p10"));
+        let vendor_default_heads = group_head_pane_ids(
+            &vendor_inventory,
+            &[],
+            &[],
+            false,
+            &vendor_nesting.stack,
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            vendor_default_heads.get("w1").map(String::as_str),
+            Some("w1:p7")
+        );
+        let vendor_quota_heads = group_head_pane_ids(
+            &vendor_inventory,
+            &[],
+            &[],
+            true,
+            &vendor_nesting.stack,
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            vendor_quota_heads.get("w1").map(String::as_str),
+            Some("w1:p10")
+        );
 
         let labels = BTreeMap::from([("w1".to_string(), "ifs".to_string())]);
         let mut head_desired = BTreeMap::new();
