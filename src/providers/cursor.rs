@@ -54,9 +54,13 @@
 //! Everything fails closed. A missing or unreadable percentage yields no
 //! window, never "0% used". Cache identity is `sha256("cursor\0" || token)` so
 //! another login cannot inherit the previous account's last-good snapshot.
-//! The collector never writes credentials, never refreshes or exchanges them,
-//! never reads `refreshToken`, and never calls a bare `agent` binary — that
-//! name is Grok's on this machine. The Keychain lookup is the same
+//! The Keychain secret is not kept in-process: `cursor-agent login` overwrites
+//! `cursor-access-token` in place, the previous token stays valid, and the
+//! one-time approval marker does not move, so a long-lived watch that cached
+//! by that marker would keep fetching the old account. The collector never
+//! writes credentials, never refreshes or exchanges them, never reads
+//! `refreshToken`, and never calls a bare `agent` binary — that name is
+//! Grok's on this machine. The Keychain lookup is the same
 //! `security find-generic-password` interface the CLI uses; other Keychain
 //! items are not opened.
 
@@ -75,7 +79,6 @@ use std::io::{IsTerminal, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -296,10 +299,13 @@ pub fn current_account_id() -> Option<String> {
 /// The IDE database is written constantly and must not bust a still-valid
 /// snapshot. On macOS without `$CURSOR_*` opt-in the auth file lives under
 /// provenance-tagged `~/.cursor`; a `stat` there is enough for Ghostty
-/// `SystemPolicyAppData`. Use the plugin-state Keychain marker instead.
+/// `SystemPolicyAppData`. Do not substitute the Keychain approval marker:
+/// `cursor-agent login` overwrites the same item in place and leaves that
+/// file alone. Cursor snapshots stamp the live token pin, so a missing mtime
+/// still drops the previous account's windows.
 pub fn auth_mtime_unix() -> Option<u64> {
     if !cursor_fs_access_allowed() {
-        return keychain_approval_mtime();
+        return None;
     }
     CacheStore::file_mtime_unix(&auth_path().ok()?)
 }
@@ -428,36 +434,15 @@ fn record_keychain_approval() -> bool {
     marker.exists()
 }
 
-type CredentialCacheKey = (Option<std::ffi::OsString>, Option<u64>);
-
-static CREDENTIAL_CACHE: LazyLock<Mutex<Option<(CredentialCacheKey, CursorCredentials)>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-fn invalidate_credentials() {
-    *CREDENTIAL_CACHE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = None;
-}
+/// No-op: Keychain secrets are not kept in-process. A 401 still retries
+/// `read_cli_keychain` so a rotated item is picked up without a restart.
+fn invalidate_credentials() {}
 
 fn read_cli_keychain() -> std::result::Result<CursorCredentials, ProviderError> {
     if !should_read_cli_keychain() {
         return Err(ProviderError::MissingCredentials);
     }
-    let security_bin = std::env::var_os("HERDR_AGENT_QUOTA_SECURITY_BIN");
-    let key = (security_bin, keychain_approval_mtime());
-    let mut cache = CREDENTIAL_CACHE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if let Some((cached_key, credentials)) = cache.as_ref() {
-        if cached_key == &key {
-            return Ok(credentials.clone());
-        }
-    }
-    let credentials = read_cli_keychain_uncached();
-    if let Ok(credentials) = &credentials {
-        *cache = Some((key, credentials.clone()));
-    }
-    credentials
+    read_cli_keychain_uncached()
 }
 
 fn read_cli_keychain_uncached() -> std::result::Result<CursorCredentials, ProviderError> {
@@ -1817,6 +1802,25 @@ mod tests {
     }
 
     #[test]
+    fn a_keychain_login_switch_is_not_held_by_the_approval_marker() {
+        let _guard = env_guard();
+        let dir = tempdir().unwrap();
+        isolate_cursor_identity(dir.path());
+        write_cli_auth_info(dir.path());
+        fs::write(dir.path().join(".herdr-keychain-approved"), "1").unwrap();
+        write_security_stub(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'token-old'\n");
+        let first = read_credentials().unwrap();
+        write_security_stub(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'token-new'\n");
+        let second = read_credentials().unwrap();
+        let account = current_account_id();
+        clear_cursor_identity();
+        assert_eq!(first.access_token, "token-old");
+        assert_eq!(second.access_token, "token-new");
+        assert_eq!(account.as_deref(), Some(account_pin("token-new").as_str()));
+        assert_ne!(account.as_deref(), Some(account_pin("token-old").as_str()));
+    }
+
+    #[test]
     fn a_keychain_approve_attempt_records_its_approval() {
         let _guard = env_guard();
         let _approve = KeychainApproveGuard::new(true);
@@ -1930,12 +1934,10 @@ mod tests {
             );
             let credentials = read_credentials().unwrap();
             assert_eq!(credentials.access_token, "keychain-token");
-            let marker_mtime =
-                CacheStore::file_mtime_unix(&dir.path().join("cursor-keychain-approved"));
             assert_eq!(
                 auth_mtime_unix(),
-                marker_mtime,
-                "watch ticks must not stat ~/.cursor/auth.json"
+                None,
+                "watch ticks must not stat ~/.cursor/auth.json, and the approval marker is not a login generation"
             );
             let mut snapshot = ProviderSnapshot::new(Provider::Cursor, vec![], 1);
             overlay_store_context(&mut snapshot, Some("00000000-0000-0000-0000-000000000001"));

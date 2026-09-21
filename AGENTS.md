@@ -137,11 +137,13 @@ than a wrong number.
   `planUsage.totalPercentUsed` when present — the CLI usage panel's Included
   row — and only then `includedSpend / limit`. The IDE `state.vscdb` mtime is
   not a credential gate. On macOS without `$CURSOR_HOME` / `$CURSOR_AUTH_FILE`
-  / `$CURSOR_STATE_DB`, `auth_mtime_unix` is the plugin-state Keychain marker
-  — a `stat` of `~/.cursor/auth.json` is enough for Ghostty TCC. On macOS,
-  `cursor-agent login` stores the token in Keychain, not `auth.json`; do not
-  fall back to the IDE token while the CLI still has `cli-config.json`
-  `authInfo`.
+  / `$CURSOR_STATE_DB`, `auth_mtime_unix` is none — a `stat` of
+  `~/.cursor/auth.json` is enough for Ghostty TCC, and the Keychain approval
+  marker is not a login generation (`cursor-agent login` overwrites
+  `cursor-access-token` in place). Re-read that Keychain item; do not keep the
+  previous token in the watch process. On macOS, `cursor-agent login` stores
+  the token in Keychain, not `auth.json`; do not fall back to the IDE token
+  while the CLI still has `cli-config.json` `authInfo`.
 
 ## Devin's per-session model is local SQLite, not the quota API
 
@@ -206,10 +208,12 @@ from event/watch/refresh/hook: those trees are Cursor-provenance, this binary
 is ad-hoc, and TCC prompts Ghostty "would like to access data from other
 apps" on every process. File reads resume only with `$CURSOR_HOME` /
 `$CURSOR_AUTH_FILE` / `$CURSOR_STATE_DB`. Model/cache/context come from the
-hook mailbox; the Keychain approval marker lives in plugin state. The cache
-identity mtime is that marker, never a `stat` of `~/.cursor/auth.json`. Never
-copy the IDE database, never use its mtime as a gate, never read `refreshToken`,
-never send a `WorkosCursorSessionToken` cookie. Background
+hook mailbox; the Keychain approval marker lives in plugin state. Do not
+treat that marker as `auth_mtime_unix`, and do not process-cache the Keychain
+secret against it: a `stat` of `~/.cursor/auth.json` is Ghostty TCC, and a
+cached token keeps the previous account's quota while that token remains
+valid. Never copy the IDE database, never use its mtime as a gate, never read
+`refreshToken`, never send a `WorkosCursorSessionToken` cookie. Background
 processes never prompt for Keychain: without a recorded approval marker the
 keychain branch is skipped, and the user approves once via
 `refresh --provider cursor --keychain-approve` (click **Always Allow**, not
