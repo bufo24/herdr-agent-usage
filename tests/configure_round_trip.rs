@@ -2295,6 +2295,47 @@ fn opencode_go_event_is_named_pane_only_and_repeatable() {
     }
 }
 
+/// OpenCode 2 writes new sessions to `session_v2`/`session_message` and leaves
+/// the v1 tables to sessions created before the upgrade, so a v2-only pane must
+/// resolve from the new layout instead of looking absent. The billing decision
+/// itself is pinned by
+/// `route::tests::opencode_v2_sessions_resolve_go_and_payg_from_the_new_tables`:
+/// an event-level assertion cannot tell `Indeterminate` from a decided
+/// resolution, because both clear a pane that already carries plugin quota.
+#[test]
+fn opencode_v2_session_publishes_its_exact_identity() {
+    let state = tempdir().unwrap();
+    let xdg = state.path().join("xdg-data");
+    install_opencode_store(&xdg, "auth-payg.json", "sessions-v2.db");
+    let inventory = two_opencode_inventory("ses_go", "{}");
+    let (herdr, herdr_log, codex, codex_log) =
+        install_logged_herdr_and_codex(state.path(), &inventory, None);
+
+    let output = run_event_binary_with_xdg(
+        state.path(),
+        &herdr,
+        &codex,
+        &opencode_working_event("w1:p9"),
+        &xdg,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    thread::sleep(Duration::from_millis(200));
+    original_four_untouched(state.path(), &codex_log);
+    assert_named_opencode_event(&herdr_log, "w1:p9", "w1:p10");
+    let calls = fs::read_to_string(&herdr_log).unwrap_or_default();
+    // w1:p10 is the vendor head (lower pane id), so the child keeps only its
+    // model; the provider half of the identity is pinned by the route test.
+    assert!(
+        calls.contains("kimi-k2.5"),
+        "v2 session identity was not published: {calls}"
+    );
+    assert_no_sibling_quota_write(&calls, "w1:p10");
+}
+
 #[test]
 fn opencode_payg_event_clears_plugin_quota_once() {
     let state = tempdir().unwrap();
