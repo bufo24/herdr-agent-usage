@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Cursor quota follows a `cursor-agent login` account switch while a watch
+  process is already running. The previous token stays valid, and the
+  one-time Keychain approval marker does not move, so caching that secret
+  against the marker kept fetching the old account's Dashboard usage.
+
 ## [1.6.2] - 2026-09-20
 
 ### Fixed
