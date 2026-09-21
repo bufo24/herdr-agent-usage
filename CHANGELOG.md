@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- OpenCode 2 sessions resolve again. OpenCode 2 keeps new sessions in
+  `session_v2`/`session_message` and carries the role in the `type` column,
+  neither of which the collector read: every session created after the upgrade
+  looked absent, so its pane lost the model, context, and OpenCode Go quota
+  rows. Both store layouts are read now, and a migrated session keeps the
+  evidence it already had.
 - Cursor quota follows a `cursor-agent login` account switch while a watch
   process is already running. The previous token stays valid, and the
   one-time Keychain approval marker does not move, so caching that secret
