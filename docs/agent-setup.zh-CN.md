@@ -5,7 +5,7 @@
 
 ---
 
-你要在这台电脑上把 **herdr-agent-quota** 装到真正能用：Herdr 的 Agent 侧栏
+你要在这台电脑上把 **herdr-agent-usage** 装到真正能用：Herdr 的 Agent 侧栏
 要显示出品牌图标、模型、上下文，以及这台机器上实际存在的那些 agent CLI 的
 订阅额度。
 
@@ -15,8 +15,8 @@
 若当前工作区已经是本仓库，直接用。否则：
 
 ```sh
-git clone https://github.com/levi-qiao/herdr-agent-quota.git
-cd herdr-agent-quota
+git clone https://github.com/levi-qiao/herdr-agent-usage.git
+cd herdr-agent-usage
 ```
 
 从本文件开头按步骤做，不要自行缩短流程。
@@ -107,14 +107,14 @@ statusLine/hooks，以及（选了 omp 且缺失时）Herdr 的 omp integration�
 
 ```sh
 herdr plugin list
-herdr plugin log list --plugin herdr-agent-quota --limit 20
+herdr plugin log list --plugin herdr-agent-usage --limit 20
 ```
 
-必须能看到已启用的 `herdr-agent-quota`。configure/startup 日志失败就是
+必须能看到已启用的 `herdr-agent-usage`。configure/startup 日志失败就是
 阻塞项：读日志，修好后再跑 `./install.sh`，或：
 
 ```sh
-herdr plugin action invoke configure --plugin herdr-agent-quota
+herdr plugin action invoke configure --plugin herdr-agent-usage
 ```
 
 等到 `herdr plugin log list` 显示 **succeeded**。`invoke` 立刻返回时状态
@@ -160,10 +160,10 @@ PUA 字符不会像普通缺字那样自动回退。没有显式映射时，格�
 Ghostty：
 
 ```
-# BEGIN herdr-agent-quota font
+# BEGIN herdr-agent-usage font
 font-codepoint-map = U+E1A0-U+E1B6="Herdr Agent Icons Max"
 font-codepoint-map = U+E1C0-U+E1C5="Herdr Agent Icons Max"
-# END herdr-agent-quota font
+# END herdr-agent-usage font
 ```
 
 常见路径：`~/Library/Application Support/com.mitchellh.ghostty/config`、
@@ -172,10 +172,10 @@ font-codepoint-map = U+E1C0-U+E1C5="Herdr Agent Icons Max"
 kitty（`~/.config/kitty/kitty.conf`）：
 
 ```
-# BEGIN herdr-agent-quota font
+# BEGIN herdr-agent-usage font
 symbol_map U+E1A0-U+E1B6 Herdr Agent Icons Max
 symbol_map U+E1C0-U+E1C5 Herdr Agent Icons Max
-# END herdr-agent-quota font
+# END herdr-agent-usage font
 ```
 
 WezTerm：把 `{ family = "Herdr Agent Icons Max" }` 加进已有的
@@ -204,13 +204,13 @@ iTerm2、Terminal.app、Alacritty、Warp：没有可靠的按码位映射。如�
 `~/.cursor/.herdr-keychain-approved`：
 
 ```sh
-./target/release/herdr-agent-quota refresh --provider cursor --keychain-approve --force
+./target/release/herdr-agent-usage refresh --provider cursor --keychain-approve --force
 ```
 
 **Muse**：登录走钥匙串，且 Muse 配置目录旁还没有批准标记：
 
 ```sh
-./target/release/herdr-agent-quota refresh --provider muse --keychain-approve --force
+./target/release/herdr-agent-usage refresh --provider muse --keychain-approve --force
 ```
 
 **先告诉用户**再跑：系统会弹窗，必须点 **Always Allow**，不要点 Allow。
@@ -222,7 +222,7 @@ token。
 ### 拉一次额度
 
 ```sh
-herdr plugin action invoke refresh --plugin herdr-agent-quota
+herdr plugin action invoke refresh --plugin herdr-agent-usage
 ```
 
 等到对应 log id 成功。`invoke` 立刻返回不等于成功。
@@ -251,12 +251,12 @@ Hook 和 integration 只在会话启动时加载：
 | 拉宽后 gauges 仍是旧长度 | `prefix+shift+r`。没有随拖动实时发布的路径。 |
 
 ```sh
-herdr plugin action invoke refresh --plugin herdr-agent-quota
-herdr plugin action invoke configure --plugin herdr-agent-quota
+herdr plugin action invoke refresh --plugin herdr-agent-usage
+herdr plugin action invoke configure --plugin herdr-agent-usage
 ```
 
 之后改设置：`prefix+shift+q`，或
-`herdr plugin pane open --plugin herdr-agent-quota --entrypoint settings --focus`。
+`herdr plugin pane open --plugin herdr-agent-usage --entrypoint settings --focus`。
 
 ## 6. 向用户汇报
 

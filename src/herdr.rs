@@ -1,3 +1,4 @@
+use crate::identity::{self, PLUGIN_ID};
 use crate::model::{ContextUsage, Harness, Provider};
 use crate::presentation::{MetadataTokens, RowStyle, SidebarShape};
 use anyhow::{Context, Result};
@@ -362,9 +363,6 @@ pub fn notify(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
-/// Source that owns this plugin's Herdr Agent view. Herdr requires the
-/// `plugin:<id>` form and rejects a set whose plugin is missing or disabled.
-const AGENT_VIEW_SOURCE: &str = "plugin:herdr-agent-quota";
 /// A socket request must not outlive the event hook that sent it. Herdr
 /// answers these in microseconds; anything near this is a hung server, and a
 /// sidebar sort is never worth blocking a turn for.
@@ -386,7 +384,7 @@ pub fn set_quota_agent_view() -> Result<()> {
         "id": "agent-quota:view-set",
         "method": "agent.view.set",
         "params": {
-            "source": AGENT_VIEW_SOURCE,
+            "source": identity::agent_view_source(),
             "label": crate::cli::AgentOrder::LABEL,
             "sort": [
                 {"field": "workspace_order", "order": "asc"},
@@ -405,7 +403,7 @@ pub fn clear_quota_agent_view() -> Result<()> {
     socket_request(&serde_json::json!({
         "id": "agent-quota:view-clear",
         "method": "agent.view.clear",
-        "params": {"source": AGENT_VIEW_SOURCE},
+        "params": {"source": identity::agent_view_source()},
     }))
     .map(|_| ())
 }
@@ -1051,7 +1049,7 @@ fn report_icon_metadata(
             "report-metadata",
             &pane.pane_id,
             "--source",
-            "herdr-agent-quota",
+            PLUGIN_ID,
         ])
         .args(["--seq", &sequence.to_string(), "--ttl-ms", METADATA_TTL_MS]);
     for name in ICON_TOKEN_NAMES {
@@ -1078,7 +1076,7 @@ fn report_pane_metadata(
             "report-metadata",
             &pane.pane_id,
             "--source",
-            "herdr-agent-quota",
+            PLUGIN_ID,
         ])
         .args(["--seq", &sequence.to_string()])
         .args(["--ttl-ms", METADATA_TTL_MS]);
@@ -1142,7 +1140,7 @@ fn sync_sibling_group_headers(
                 "report-metadata",
                 &sibling.pane_id,
                 "--source",
-                "herdr-agent-quota",
+                PLUGIN_ID,
             ])
             .args(["--seq", &sequence.to_string()])
             .args(["--ttl-ms", METADATA_TTL_MS]);

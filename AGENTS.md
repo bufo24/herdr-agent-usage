@@ -1,6 +1,6 @@
 # Agent guide
 
-Notes for agents working on `herdr-agent-quota`. Read this before touching
+Notes for agents working on `herdr-agent-usage`. Read this before touching
 anything that talks to Herdr.
 
 ## Working method
@@ -239,7 +239,7 @@ same numbers the CLI footer prints (`Auto · 8.1%`). Only that protobuf field
 is read. Cache still comes from the hooks; `context_usage_percent` wins when
 present, otherwise last `input_tokens` against `context_window_size`,
 Composer 2.x's documented 200k window, or Auto/`default`'s 256k window.
-`configure` writes `herdr-agent-quota-hooks.sh` under plugin state — not
+`configure` writes `herdr-agent-usage-hooks.sh` under plugin state — not
 next to `hooks.json`. `bash ~/.cursor/…` is a Ghostty-attributed open of
 Cursor-provenance files and prompts twice per turn (`afterAgentResponse`
 then `stop`). It never replaces Herdr's `sessionStart`. Cursor CLI loads user
@@ -257,7 +257,7 @@ quota`): Space grouping plus least-headroom ranking inside each space.
 **The Agent view** (`agent.view.set`, `src/herdr.rs`). Herdr keeps exactly
 one, and setting it replaces the user's own `ui.agent_panel_sort`. Rules:
 
-1. **Always scope a clear to `plugin:herdr-agent-quota`.** An unscoped
+1. **Always scope a clear to `plugin:herdr-agent-usage`.** An unscoped
    `agent.view.clear` would drop a view another plugin owns. `startup` goes
    further and does not call clear at all when the order is `default` — there
    is nothing of ours to restore, and silence is the only way to be sure a
@@ -397,5 +397,5 @@ cargo clippy --release
 Reloading the plugin after a rebuild:
 
 ```
-herdr plugin disable herdr-agent-quota && herdr plugin enable herdr-agent-quota
+herdr plugin disable herdr-agent-usage && herdr plugin enable herdr-agent-usage
 ```

@@ -1,13 +1,13 @@
 # Agent setup playbook
 
 Instructions for a coding agent installing
-[herdr-agent-quota](https://github.com/levi-qiao/herdr-agent-quota) on the
+[herdr-agent-usage](https://github.com/levi-qiao/herdr-agent-usage) on the
 machine that runs Herdr. Humans: paste this file, or the prompt in the README,
 into Claude, Cursor, Grok, Codex, or any similar agent **on that machine**.
 
 ---
 
-You are installing **herdr-agent-quota** so Herdr's Agent sidebar shows brand
+You are installing **herdr-agent-usage** so Herdr's Agent sidebar shows brand
 icons, model, context, and subscription quota for the agent CLIs this computer
 actually has.
 
@@ -18,8 +18,8 @@ are not finished.
 If this working tree is already the repo, use it. Otherwise:
 
 ```sh
-git clone https://github.com/levi-qiao/herdr-agent-quota.git
-cd herdr-agent-quota
+git clone https://github.com/levi-qiao/herdr-agent-usage.git
+cd herdr-agent-usage
 ```
 
 Then follow this file from the top. Do not improvise a shorter path.
@@ -114,14 +114,14 @@ kill watchers.
 
 ```sh
 herdr plugin list
-herdr plugin log list --plugin herdr-agent-quota --limit 20
+herdr plugin log list --plugin herdr-agent-usage --limit 20
 ```
 
-`herdr-agent-quota` must be present and enabled. A failed configure/startup
+`herdr-agent-usage` must be present and enabled. A failed configure/startup
 log is a blocker: read it, fix it, re-run `./install.sh` or
 
 ```sh
-herdr plugin action invoke configure --plugin herdr-agent-quota
+herdr plugin action invoke configure --plugin herdr-agent-usage
 ```
 
 and wait until `herdr plugin log list` shows **succeeded** (invoke returns
@@ -170,10 +170,10 @@ Without an explicit map, the cell is a box, blank, or `?`.
 Ghostty:
 
 ```
-# BEGIN herdr-agent-quota font
+# BEGIN herdr-agent-usage font
 font-codepoint-map = U+E1A0-U+E1B6="Herdr Agent Icons Max"
 font-codepoint-map = U+E1C0-U+E1C5="Herdr Agent Icons Max"
-# END herdr-agent-quota font
+# END herdr-agent-usage font
 ```
 
 Typical paths: `~/Library/Application Support/com.mitchellh.ghostty/config`,
@@ -182,10 +182,10 @@ Typical paths: `~/Library/Application Support/com.mitchellh.ghostty/config`,
 kitty (`~/.config/kitty/kitty.conf`):
 
 ```
-# BEGIN herdr-agent-quota font
+# BEGIN herdr-agent-usage font
 symbol_map U+E1A0-U+E1B6 Herdr Agent Icons Max
 symbol_map U+E1C0-U+E1C5 Herdr Agent Icons Max
-# END herdr-agent-quota font
+# END herdr-agent-usage font
 ```
 
 WezTerm: add `{ family = "Herdr Agent Icons Max" }` to an existing
@@ -215,14 +215,14 @@ CLI logins (Keychain item `cursor-access-token` / `cursor-user`) and Muse
 `~/.cursor/.herdr-keychain-approved` is missing:
 
 ```sh
-./target/release/herdr-agent-quota refresh --provider cursor --keychain-approve --force
+./target/release/herdr-agent-usage refresh --provider cursor --keychain-approve --force
 ```
 
 **Muse** — auth is keychain-backed and the marker beside the Muse config dir
 is missing:
 
 ```sh
-./target/release/herdr-agent-quota refresh --provider muse --keychain-approve --force
+./target/release/herdr-agent-usage refresh --provider muse --keychain-approve --force
 ```
 
 Warn the user **before** running this: a system dialog will appear. They
@@ -234,7 +234,7 @@ still has `authInfo`.
 ### Refresh quota
 
 ```sh
-herdr plugin action invoke refresh --plugin herdr-agent-quota
+herdr plugin action invoke refresh --plugin herdr-agent-usage
 ```
 
 Wait for that log id to succeed. Invoke returning immediately is not
@@ -265,12 +265,12 @@ Hooks and integrations load at session start:
 | `gauges` still the old width | `prefix+shift+r`. There is no live resize publish path. |
 
 ```sh
-herdr plugin action invoke refresh --plugin herdr-agent-quota
-herdr plugin action invoke configure --plugin herdr-agent-quota
+herdr plugin action invoke refresh --plugin herdr-agent-usage
+herdr plugin action invoke configure --plugin herdr-agent-usage
 ```
 
 Settings later: `prefix+shift+q`, or
-`herdr plugin pane open --plugin herdr-agent-quota --entrypoint settings --focus`.
+`herdr plugin pane open --plugin herdr-agent-usage --entrypoint settings --focus`.
 
 ## 6. Report to the user
 

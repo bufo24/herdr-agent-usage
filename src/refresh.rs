@@ -425,7 +425,7 @@ fn run_internal(
     Ok(())
 }
 
-/// Herdr drops `plugin:herdr-agent-quota`'s Agent view on disable. Enable
+/// Herdr drops this plugin's Agent view (`plugin:<id>`) on disable. Enable
 /// does not run startup, so a forced refresh is the repair that also
 /// respawns the watcher. Event/focus/watch ticks stay off this path.
 fn restore_quota_agent_view(cache: &CacheStore) {
