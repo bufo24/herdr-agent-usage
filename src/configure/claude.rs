@@ -15,10 +15,13 @@ const CONFIG: Adapter = Adapter {
 };
 
 pub fn check() -> Result<()> {
-    CONFIG.check(&settings_path(
-        "CLAUDE_SETTINGS_FILE",
-        ".claude/settings.json",
-    )?)
+    let cache = CacheStore::from_env()?;
+    let executable = std::env::current_exe().context("resolve plugin executable")?;
+    CONFIG.check(
+        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        cache.root(),
+        &executable,
+    )
 }
 
 pub fn apply() -> Result<()> {

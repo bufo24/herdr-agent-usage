@@ -20,6 +20,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A Claude or Agy statusLine payload that reports only a model id, such as a
+  model released after this build, now shows that id instead of a blank
+  model. The display name is still preferred when the payload has one.
+- `configure --check` reports a Claude or Agy statusLine hook that still
+  feeds another install (for example the pre-rename `herdr-agent-quota`
+  binary and state directory) as stale instead of installed. Such a hook
+  never reaches this plugin, so new sessions show no model or quota until
+  `configure --apply` rewrites it.
+- Codex quota and per-session models refresh again when Herdr runs the
+  plugin. Herdr's server PATH can omit Homebrew, so every hook, action, and
+  watcher fetch failed to start `codex app-server` and kept a stale snapshot
+  whose model belonged to whatever session a terminal refresh last saw. With
+  no `$CODEX_BIN_PATH` and no `codex` on PATH, the collector now tries
+  `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
+- Codex panes launched through wrappers that suppress Codex hooks now recover
+  their session from Herdr's foreground cwd plus the native Codex process
+  start time, matched to exactly one rollout's `session_meta`. The recovery
+  runs on every agent inventory read, so the active-turn watcher, focus, and
+  sibling publishes keep that session's model and context instead of
+  borrowing the newest provider-wide rollout between manual refreshes. Only
+  rollouts dated within a day of the process start are opened. Ambiguous
+  matches remain unresolved.
 - OpenCode 2 sessions resolve again. OpenCode 2 keeps new sessions in
   `session_v2`/`session_message` and carries the role in the `type` column,
   neither of which the collector read: every session created after the upgrade
