@@ -214,40 +214,20 @@ fn session_ids_for_panes_at(
         .map(|(_, cwd, _)| cwd.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let mut by_cwd = BTreeMap::<String, Vec<(String, u64)>>::new();
-    let mut directories = vec![home.join("sessions"), home.join("archived_sessions")];
-    while let Some(directory) = directories.pop() {
-        let Ok(entries) = fs::read_dir(directory) else {
+    for path in rollouts_started_near(home, panes.iter().map(|(_, _, started)| *started)) {
+        let Some((session_id, cwd, started_at)) = rollout_session_meta_with_started_at(&path)
+        else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                directories.push(path);
-                continue;
-            }
-            if !file_type.is_file()
-                || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
-            {
-                continue;
-            }
-            let Some((session_id, cwd, started_at)) = rollout_session_meta_with_started_at(&path)
-            else {
-                continue;
-            };
-            if wanted.contains(cwd.as_str())
-                && entry
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(session_id.as_str())
-            {
-                by_cwd
-                    .entry(cwd)
-                    .or_default()
-                    .push((session_id, started_at));
-            }
+        if wanted.contains(cwd.as_str())
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(session_id.as_str()))
+        {
+            by_cwd
+                .entry(cwd)
+                .or_default()
+                .push((session_id, started_at));
         }
     }
     panes
@@ -265,6 +245,64 @@ fn session_ids_for_panes_at(
                 .then(|| (pane_id.clone(), session_id.clone()))
         })
         .collect()
+}
+
+/// Rollouts whose file date is within a day of a process start. Codex names
+/// both the `sessions/YYYY/MM/DD` directory and the file by the local start
+/// date, so the UTC day either side covers every offset. Every Herdr
+/// inventory read resolves session-less panes, so this must not walk the
+/// whole rollout history.
+fn rollouts_started_near(home: &Path, starts: impl Iterator<Item = u64>) -> Vec<PathBuf> {
+    let days = starts
+        .filter_map(|started| i64::try_from(started).ok())
+        .filter_map(|started| time::OffsetDateTime::from_unix_timestamp(started).ok())
+        .flat_map(|started| {
+            [
+                started.date().previous_day(),
+                Some(started.date()),
+                started.date().next_day(),
+            ]
+        })
+        .flatten()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut directories = days
+        .iter()
+        .map(|day| {
+            home.join("sessions")
+                .join(format!("{:04}", day.year()))
+                .join(format!("{:02}", u8::from(day.month())))
+                .join(format!("{:02}", day.day()))
+        })
+        .collect::<Vec<_>>();
+    directories.push(home.join("archived_sessions"));
+    let prefixes = days
+        .iter()
+        .map(|day| {
+            format!(
+                "rollout-{:04}-{:02}-{:02}T",
+                day.year(),
+                u8::from(day.month()),
+                day.day()
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    for directory in directories {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".jsonl")
+                && prefixes.iter().any(|prefix| name.starts_with(prefix))
+                && entry.file_type().is_ok_and(|file_type| file_type.is_file())
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
+    paths
 }
 
 fn rollout_session_meta_with_started_at(path: &Path) -> Option<(String, String, u64)> {
@@ -1067,29 +1105,135 @@ mod tests {
         assert!(!snapshot.session_contexts.contains_key("other-session"));
     }
 
+    fn write_session_meta(home: &Path, day: &str, stamp: &str, id: &str, cwd: &str, at: &str) {
+        let rollouts = home.join("sessions").join(day);
+        fs::create_dir_all(&rollouts).unwrap();
+        fs::write(
+            rollouts.join(format!("rollout-{stamp}-{id}.jsonl")),
+            serde_json::json!({"type":"session_meta", "timestamp": at,
+                "payload":{"id":id,"cwd":cwd,"timestamp":at,"originator":"codex-tui"}})
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+    }
+
     #[test]
     fn resolves_a_reused_cwd_only_when_the_process_start_matches_one_rollout() {
         let directory = tempfile::tempdir().unwrap();
-        let rollouts = directory.path().join("sessions/2026/09/22");
-        fs::create_dir_all(&rollouts).unwrap();
-        for (id, timestamp) in [
-            ("old", "1970-01-01T00:01:40Z"),
-            ("live", "1970-01-01T00:16:40Z"),
+        for (id, stamp, at) in [
+            ("old", "2026-09-22T07-01-40", "2026-09-22T13:01:40Z"),
+            ("live", "2026-09-22T07-16-40", "2026-09-22T13:16:40Z"),
         ] {
-            fs::write(
-                rollouts.join(format!("rollout-{id}.jsonl")),
-                serde_json::json!({"type":"session_meta", "timestamp": timestamp,
-                    "payload":{"id":id,"cwd":"/treehouse/reused"}})
-                .to_string()
-                    + "\n",
-            )
-            .unwrap();
+            write_session_meta(
+                directory.path(),
+                "2026/09/22",
+                stamp,
+                id,
+                "/treehouse/reused",
+                at,
+            );
         }
         let resolved = session_ids_for_panes_at(
             directory.path(),
-            &[("w1:p1".to_string(), "/treehouse/reused".to_string(), 1_002)],
+            // 2026-09-22T13:16:42Z
+            &[(
+                "w1:p1".to_string(),
+                "/treehouse/reused".to_string(),
+                1_790_083_002,
+            )],
         );
         assert_eq!(resolved.get("w1:p1").map(String::as_str), Some("live"));
+    }
+
+    /// Sanitized from two Firstmate workers relaunched into reused treehouse
+    /// worktrees (Herdr panes with hooks disabled, so no agent_session). Each
+    /// cwd has an older rollout from the previous worker; only the process
+    /// start picks the live one. The third pane starts after UTC midnight
+    /// while Codex filed it under the previous local day.
+    #[test]
+    fn relaunched_workers_in_reused_worktrees_bind_their_own_rollouts() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path();
+        let hermes = "/treehouse/ralph-hermes-86f4b1/1/ralph-hermes";
+        let ember = "/treehouse/eaves-and-ember-717502/1/eaves-and-ember";
+        for (stamp, id, cwd, at) in [
+            (
+                "2026-09-22T10-13-09",
+                "01a0c9e4-7d2e-7420-a351-4edbc4bbda48",
+                hermes,
+                "2026-09-22T16:13:10.017Z",
+            ),
+            (
+                "2026-09-22T11-36-55",
+                "01a0ca31-2d7b-7863-8d3c-58bf5cf4c566",
+                hermes,
+                "2026-09-22T17:36:55.920Z",
+            ),
+            (
+                "2026-09-22T11-10-32",
+                "01a0ca19-06ee-7910-bcc4-cde13c5a5312",
+                ember,
+                "2026-09-22T17:10:33.180Z",
+            ),
+            (
+                "2026-09-22T11-37-08",
+                "01a0ca31-5e0a-7040-bdc6-28bfc15690e1",
+                ember,
+                "2026-09-22T17:37:08.339Z",
+            ),
+            (
+                "2026-09-22T21-30-00",
+                "late-local-evening",
+                "/treehouse/late",
+                "2026-09-23T03:30:00.500Z",
+            ),
+        ] {
+            write_session_meta(home, "2026/09/22", stamp, id, cwd, at);
+        }
+        let resolved = session_ids_for_panes_at(
+            home,
+            &[
+                // ps start 2026-09-22T17:36:55Z
+                ("w28:p2".to_string(), hermes.to_string(), 1_790_098_615),
+                // ps start 2026-09-22T17:37:07Z
+                ("w29:p2".to_string(), ember.to_string(), 1_790_098_627),
+                // ps start 2026-09-23T03:30:00Z
+                (
+                    "w30:p1".to_string(),
+                    "/treehouse/late".to_string(),
+                    1_790_134_200,
+                ),
+            ],
+        );
+        assert_eq!(
+            resolved.get("w28:p2").map(String::as_str),
+            Some("01a0ca31-2d7b-7863-8d3c-58bf5cf4c566")
+        );
+        assert_eq!(
+            resolved.get("w29:p2").map(String::as_str),
+            Some("01a0ca31-5e0a-7040-bdc6-28bfc15690e1")
+        );
+        assert_eq!(
+            resolved.get("w30:p1").map(String::as_str),
+            Some("late-local-evening")
+        );
+    }
+
+    #[test]
+    fn two_rollouts_near_one_process_start_stay_unresolved() {
+        let directory = tempfile::tempdir().unwrap();
+        for (id, stamp, at) in [
+            ("first", "2026-09-22T11-36-55", "2026-09-22T17:36:55Z"),
+            ("second", "2026-09-22T11-37-20", "2026-09-22T17:37:20Z"),
+        ] {
+            write_session_meta(directory.path(), "2026/09/22", stamp, id, "/shared", at);
+        }
+        let resolved = session_ids_for_panes_at(
+            directory.path(),
+            &[("w1:p1".to_string(), "/shared".to_string(), 1_790_098_615)],
+        );
+        assert!(resolved.is_empty());
     }
 
     #[test]

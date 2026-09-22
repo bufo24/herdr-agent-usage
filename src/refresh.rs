@@ -399,12 +399,10 @@ fn run_internal(
     // sessions without adding another Herdr call or reading any pane output.
     let enabled = AgentSelection::from_args_or_env(&[]);
     let panes = list_agent_panes().ok().map(|panes| {
-        let mut panes = panes
+        panes
             .into_iter()
             .filter(|pane| enabled.contains(&pane.harness))
-            .collect::<Vec<_>>();
-        crate::herdr::attach_codex_sessions(&mut panes);
-        panes
+            .collect::<Vec<_>>()
     });
     let session_panes = panes.as_deref().unwrap_or_default();
     let enabled_providers = providers.iter().copied().filter(|provider| {
