@@ -181,7 +181,7 @@ mod tests {
                 ("HERDR_PLUGIN_STATE_DIR", Some(new_state.as_os_str())),
                 ("HERDR_PLUGIN_CONFIG_DIR", Some(new_config.as_os_str())),
             ],
-            || super::adopt_alias_plugin_dirs(),
+            super::adopt_alias_plugin_dirs,
         );
 
         assert_eq!(
