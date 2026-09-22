@@ -20,6 +20,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A Claude or Agy statusLine payload that reports only a model id, such as a
+  model released after this build, now shows that id instead of a blank
+  model. The display name is still preferred when the payload has one.
+- `configure --check` reports a Claude or Agy statusLine hook that still
+  feeds another install (for example the pre-rename `herdr-agent-quota`
+  binary and state directory) as stale instead of installed. Such a hook
+  never reaches this plugin, so new sessions show no model or quota until
+  `configure --apply` rewrites it.
 - Codex quota and per-session models refresh again when Herdr runs the
   plugin. Herdr's server PATH can omit Homebrew, so every hook, action, and
   watcher fetch failed to start `codex app-server` and kept a stale snapshot

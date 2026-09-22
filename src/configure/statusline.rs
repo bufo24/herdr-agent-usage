@@ -12,9 +12,24 @@ pub(crate) struct Adapter {
 }
 
 impl Adapter {
-    pub fn check(&self, path: &Path) -> Result<()> {
+    pub fn check(&self, path: &Path, state: &Path, executable: &Path) -> Result<()> {
         let settings = read_settings(path, self.label)?;
+        let command = settings
+            .get("statusLine")
+            .and_then(|value| value.get("command"))
+            .and_then(Value::as_str);
         if self.is_installed(settings.get("statusLine")) {
+            // An upgrade that skipped `configure --apply` (the plugin id
+            // rename, a moved checkout) leaves the hook feeding another state
+            // directory, so this install never receives an observation.
+            if command != Some(self.wrapper_command(state, executable).as_str()) {
+                println!(
+                    "{} statusLine collector is stale and feeds another install: {}; `configure --apply` repairs it",
+                    self.label,
+                    path.display()
+                );
+                return Ok(());
+            }
             println!(
                 "{} statusLine collector is installed: {}",
                 self.label,
@@ -61,12 +76,7 @@ impl Adapter {
             fs::write(&backup, serde_json::to_vec_pretty(&original)?)
                 .with_context(|| format!("write {} statusLine backup", self.label))?;
         }
-        let wrapper_command = format!(
-            "HERDR_PLUGIN_STATE_DIR={} {} {}",
-            shell_quote(state),
-            shell_quote(executable),
-            self.subcommand
-        );
+        let wrapper_command = self.wrapper_command(state, executable);
         let status_line = settings
             .get_mut("statusLine")
             .and_then(Value::as_object_mut)
@@ -145,6 +155,15 @@ impl Adapter {
             return Ok(None);
         };
         run_shell_with_deadline(&command, input, STATUSLINE_COMMAND_BUDGET).map(Some)
+    }
+
+    fn wrapper_command(&self, state: &Path, executable: &Path) -> String {
+        format!(
+            "HERDR_PLUGIN_STATE_DIR={} {} {}",
+            shell_quote(state),
+            shell_quote(executable),
+            self.subcommand
+        )
     }
 
     fn is_installed(&self, status_line: Option<&Value>) -> bool {
