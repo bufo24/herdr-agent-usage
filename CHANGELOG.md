@@ -20,6 +20,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Codex quota and per-session models refresh again when Herdr runs the
+  plugin. Herdr's server PATH can omit Homebrew, so every hook, action, and
+  watcher fetch failed to start `codex app-server` and kept a stale snapshot
+  whose model belonged to whatever session a terminal refresh last saw. With
+  no `$CODEX_BIN_PATH` and no `codex` on PATH, the collector now tries
+  `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
 - Codex panes launched through wrappers that suppress Codex hooks now recover
   their session from Herdr's foreground cwd plus the native Codex process
   start time, matched to exactly one rollout's `session_meta`. The recovery

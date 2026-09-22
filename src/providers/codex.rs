@@ -153,8 +153,7 @@ fn parse_reset(value: &Value) -> Option<ResetAt> {
 /// the refresh path supplies pane session ids so an older pane is not lost
 /// behind the bounded `thread/list` page.
 pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
-    let executable = std::env::var_os("CODEX_BIN_PATH").unwrap_or_else(|| "codex".into());
-    let mut command = Command::new(executable);
+    let mut command = codex_command();
     command
         .args(["app-server", "--stdio"])
         .stdin(Stdio::piped())
@@ -190,6 +189,62 @@ pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
     let result = fetch_from_process(&mut input, &mut output, session_ids);
     terminate(&child);
     result
+}
+
+/// Herdr runs hooks, actions, and the watcher with its server's PATH, which
+/// on macOS can be launchd's `/usr/bin:/bin:/usr/sbin:/sbin`. A bare `codex`
+/// then never starts, every fetch keeps the cached snapshot, and pane models
+/// stop following new sessions. Fall back to the usual install directories,
+/// and put the chosen one on the child's PATH so an npm `env node` shim finds
+/// the `node` installed beside it.
+fn codex_command() -> Command {
+    let path = std::env::var_os("PATH");
+    let fallbacks = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".local/bin"))
+        .into_iter()
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .collect::<Vec<_>>();
+    let (executable, directory) = resolve_codex_executable(
+        std::env::var_os("CODEX_BIN_PATH"),
+        path.as_deref(),
+        &fallbacks,
+    );
+    let mut command = Command::new(executable);
+    if let Some(directory) = directory {
+        let paths = std::iter::once(directory)
+            .chain(path.iter().flat_map(std::env::split_paths))
+            .collect::<Vec<_>>();
+        if let Ok(joined) = std::env::join_paths(paths) {
+            command.env("PATH", joined);
+        }
+    }
+    command
+}
+
+fn resolve_codex_executable(
+    configured: Option<std::ffi::OsString>,
+    path: Option<&std::ffi::OsStr>,
+    fallbacks: &[PathBuf],
+) -> (std::ffi::OsString, Option<PathBuf>) {
+    if let Some(configured) = configured {
+        return (configured, None);
+    }
+    let on_path = path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .any(|directory| directory.join("codex").is_file());
+    if !on_path {
+        if let Some(directory) = fallbacks
+            .iter()
+            .find(|directory| directory.join("codex").is_file())
+        {
+            return (
+                directory.join("codex").into_os_string(),
+                Some(directory.clone()),
+            );
+        }
+    }
+    ("codex".into(), None)
 }
 
 const PROCESS_SESSION_START_TOLERANCE_SECONDS: u64 = 90;
@@ -1218,6 +1273,35 @@ mod tests {
             resolved.get("w30:p1").map(String::as_str),
             Some("late-local-evening")
         );
+    }
+
+    #[test]
+    fn a_herdr_server_path_without_codex_falls_back_to_an_install_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let system = directory.path().join("usr-bin");
+        let homebrew = directory.path().join("homebrew-bin");
+        fs::create_dir_all(&system).unwrap();
+        fs::create_dir_all(&homebrew).unwrap();
+        fs::write(homebrew.join("codex"), "").unwrap();
+        let fallbacks = [directory.path().join("absent"), homebrew.clone()];
+
+        let (executable, prepended) =
+            resolve_codex_executable(None, Some(system.as_os_str()), &fallbacks);
+        assert_eq!(executable, homebrew.join("codex").into_os_string());
+        assert_eq!(prepended, Some(homebrew.clone()));
+
+        // Codex already on PATH, or an explicit override, is used as given.
+        let (executable, prepended) =
+            resolve_codex_executable(None, Some(homebrew.as_os_str()), &fallbacks);
+        assert_eq!(executable, std::ffi::OsString::from("codex"));
+        assert_eq!(prepended, None);
+        let (executable, prepended) = resolve_codex_executable(
+            Some("/custom/codex".into()),
+            Some(system.as_os_str()),
+            &fallbacks,
+        );
+        assert_eq!(executable, std::ffi::OsString::from("/custom/codex"));
+        assert_eq!(prepended, None);
     }
 
     #[test]
