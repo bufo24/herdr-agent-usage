@@ -34,6 +34,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whose model belonged to whatever session a terminal refresh last saw. With
   no `$CODEX_BIN_PATH` and no `codex` on PATH, the collector now tries
   `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
+- `$CODEX_BIN_PATH` set to an npm-style codex shim now starts under Herdr's
+  server PATH too. The collector prepends the override's parent directory
+  to the child PATH the same way the automatic fallback does, so a shim
+  beginning with `#!/usr/bin/env node` resolves `node` next to itself
+  instead of failing with `env: node: No such file or directory`.
 - Codex panes launched through wrappers that suppress Codex hooks now recover
   their session from Herdr's foreground cwd plus the native Codex process
   start time, matched to exactly one rollout's `session_meta`. The recovery

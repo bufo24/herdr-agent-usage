@@ -227,7 +227,17 @@ fn resolve_codex_executable(
     fallbacks: &[PathBuf],
 ) -> (std::ffi::OsString, Option<PathBuf>) {
     if let Some(configured) = configured {
-        return (configured, None);
+        // An npm-style shim starts with `#!/usr/bin/env node`, so the script
+        // resolves `node` through its own PATH. Herdr's server PATH omits
+        // Homebrew, and `codex_command` already prepends the install directory
+        // in the auto-discovery case. Mirror that here when the override names
+        // a file with a parent directory. A bare name like `codex` is resolved
+        // against the existing PATH, so there is no directory to prepend.
+        let directory = PathBuf::from(&configured)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(PathBuf::from);
+        return (configured, directory);
     }
     let on_path = path
         .into_iter()
@@ -1301,6 +1311,42 @@ mod tests {
             &fallbacks,
         );
         assert_eq!(executable, std::ffi::OsString::from("/custom/codex"));
+        assert_eq!(prepended, Some(PathBuf::from("/custom")));
+    }
+
+    #[test]
+    fn an_explicit_codex_bin_path_prepends_its_directory_to_the_child_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let shim_dir = directory.path().join("shims");
+        fs::create_dir_all(&shim_dir).unwrap();
+        fs::write(shim_dir.join("codex"), "").unwrap();
+        let configured = shim_dir.join("codex").into_os_string();
+
+        // $CODEX_BIN_PATH pointing at a shim: use the override as-is and
+        // prepend its directory so an `env node` shim resolves node under
+        // Herdr's minimal server PATH.
+        let (executable, prepended) = resolve_codex_executable(
+            Some(configured.clone()),
+            Some(directory.path().join("absent").as_os_str()),
+            &[],
+        );
+        assert_eq!(executable, configured);
+        assert_eq!(prepended, Some(shim_dir.clone()));
+
+        // A bare name without a directory component is resolved against the
+        // inherited PATH; there is no directory to prepend.
+        let (executable, prepended) = resolve_codex_executable(
+            Some(std::ffi::OsString::from("codex")),
+            Some(directory.path().join("absent").as_os_str()),
+            &[],
+        );
+        assert_eq!(executable, std::ffi::OsString::from("codex"));
+        assert_eq!(prepended, None);
+
+        // Unset: unchanged - no directory is prepended.
+        let (executable, prepended) =
+            resolve_codex_executable(None, Some(shim_dir.as_os_str()), &[]);
+        assert_eq!(executable, std::ffi::OsString::from("codex"));
         assert_eq!(prepended, None);
     }
 
