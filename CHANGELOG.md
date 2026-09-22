@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub repository and Herdr plugin id are now
+  [`levi-qiao/herdr-agent-usage`](https://github.com/levi-qiao/herdr-agent-usage)
+  / `herdr-agent-usage`. `./install.sh` adopts config and state from
+  `herdr-agent-quota` even when Herdr has already switched the linked id, then
+  unlinks the old id if it is still listed. The first launch of the new binary
+  does the same for the state and config directories Herdr injects. Files the
+  new directory already has are kept. The previous Cursor hook script stays at
+  its old path until `./install.sh` rewrites `hooks.json`. `./uninstall.sh`
+  restores either id.
+
 ### Fixed
 
 - Cursor quota follows a `cursor-agent login` account switch while a watch
@@ -884,20 +896,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A popup dashboard pane, event-driven refresh, and a local snapshot cache that
   survives provider failures.
 
-[Unreleased]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.6.2...HEAD
-[1.6.2]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.6.1...v1.6.2
-[1.6.1]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.6.0...v1.6.1
-[1.6.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.5...v1.6.0
-[1.5.5]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.4...v1.5.5
-[1.5.4]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.3...v1.5.4
-[1.5.3]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.2...v1.5.3
-[1.5.2]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.1...v1.5.2
-[1.5.1]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.5.0...v1.5.1
-[1.5.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.4.0...v1.5.0
-[1.4.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v0.2.0...v1.0.0
-[0.2.0]: https://github.com/levi-qiao/herdr-agent-quota/releases/tag/v0.2.0
-[0.1.0]: https://github.com/levi-qiao/herdr-agent-quota/releases/tag/v0.1.0
+[Unreleased]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.6.1...v1.6.2
+[1.6.1]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.5...v1.6.0
+[1.5.5]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/levi-qiao/herdr-agent-usage/compare/v0.2.0...v1.0.0
+[0.2.0]: https://github.com/levi-qiao/herdr-agent-usage/releases/tag/v0.2.0
+[0.1.0]: https://github.com/levi-qiao/herdr-agent-usage/releases/tag/v0.1.0

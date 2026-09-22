@@ -338,10 +338,10 @@ fn read_credentials() -> std::result::Result<CursorCredentials, ProviderError> {
     // IDE database: that is a different account, and on macOS the default
     // path is Cursor.app's Application Support (Ghostty TCC prompt storm).
     if cli_config_has_login() {
-        return Err(ProviderError::Unavailable(
-            "macOS Keychain approval needed — run `herdr-agent-quota refresh --provider cursor --keychain-approve`"
-                .to_string(),
-        ));
+        return Err(ProviderError::Unavailable(format!(
+            "macOS Keychain approval needed — run `{}`",
+            crate::identity::keychain_approve_command("cursor")
+        )));
     }
     read_ide_access_token()
 }
@@ -456,13 +456,14 @@ fn read_cli_keychain_uncached() -> std::result::Result<CursorCredentials, Provid
         if cli_config_has_login() {
             if cfg!(not(test)) && std::io::stderr().is_terminal() {
                 eprintln!(
-                    "cursor: macOS Keychain approval needed — run `herdr-agent-quota refresh --provider cursor --keychain-approve` and click Always Allow (not Allow) on the prompt."
+                    "cursor: macOS Keychain approval needed — run `{}` and click Always Allow (not Allow) on the prompt.",
+                    crate::identity::keychain_approve_command("cursor")
                 );
             }
-            return Err(ProviderError::Unavailable(
-                "macOS Keychain approval needed — run `herdr-agent-quota refresh --provider cursor --keychain-approve`"
-                    .to_string(),
-            ));
+            return Err(ProviderError::Unavailable(format!(
+                "macOS Keychain approval needed — run `{}`",
+                crate::identity::keychain_approve_command("cursor")
+            )));
         }
         return Err(ProviderError::MissingCredentials);
     }
@@ -652,7 +653,7 @@ fn state_db_path() -> Option<PathBuf> {
     // macOS: never stat the default Cursor.app container. `exists()` on
     // `~/Library/Application Support/Cursor` is enough for TCC to ask
     // Ghostty "would like to access data from other apps" on every
-    // herdr-agent-quota process (event, watch tick, hook). Opt in with
+    // plugin process (event, watch tick, hook). Opt in with
     // `$CURSOR_STATE_DB` if an IDE-only login is required.
     #[cfg(target_os = "macos")]
     {

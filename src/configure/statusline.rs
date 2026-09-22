@@ -1,3 +1,4 @@
+use crate::identity::{self, PLUGIN_ID};
 use crate::process::{run_shell_with_deadline, CommandOutput, STATUSLINE_COMMAND_BUDGET};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -152,7 +153,7 @@ impl Adapter {
             .and_then(Value::as_str)
             .is_some_and(|command| {
                 command.contains(self.subcommand)
-                    && (command.contains("herdr-agent-quota")
+                    && (identity::command_mentions_us(command)
                         || command.contains("agy-statusline.sh"))
             })
     }
@@ -215,7 +216,7 @@ fn write_settings(path: &Path, settings: &Value, label: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {label} settings directory"))?;
     }
-    let temporary = path.with_extension("json.herdr-agent-quota.tmp");
+    let temporary = path.with_extension(format!("json.{PLUGIN_ID}.tmp"));
     fs::write(&temporary, serde_json::to_vec_pretty(settings)?)?;
     fs::rename(temporary, path).with_context(|| format!("replace {label} settings"))
 }

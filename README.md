@@ -1,9 +1,9 @@
-# herdr-agent-quota
+# herdr-agent-usage
 
 Model, context, and subscription quota in Herdr's Agent sidebar — grouped by
 Space, with brand icons that carry agent status.
 
-[![CI](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml)
+[![CI](https://github.com/levi-qiao/herdr-agent-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-usage/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [简体中文](README.zh-CN.md)
@@ -39,10 +39,17 @@ Requires **Herdr 0.9.0+**, the Rust toolchain pinned in `rust-toolchain.toml`,
 macOS or Linux, and a supported agent CLI.
 
 ```sh
-git clone https://github.com/levi-qiao/herdr-agent-quota.git
-cd herdr-agent-quota
+git clone https://github.com/levi-qiao/herdr-agent-usage.git
+cd herdr-agent-usage
 ./install.sh
 ```
+
+The GitHub repository and Herdr plugin id are both `herdr-agent-usage`.
+`./install.sh` adopts an existing `herdr-agent-quota` install even when Herdr
+has already switched the linked id, then unlinks the old id. The first launch
+of the new binary adopts the same directories. Run `./install.sh` after
+pulling so the Cursor hook command is rewritten; until then the previous hook
+script keeps running.
 
 To enable a subset, use `./install.sh --agent claude,codex,omp`.
 Existing sessions need restarting only when newly installed hooks or Herdr
@@ -75,11 +82,11 @@ steps, with commands, are in [docs/agent-setup.md](docs/agent-setup.md)
 ([中文](docs/agent-setup.zh-CN.md)).
 
 ```
-Install and fully configure herdr-agent-quota on this computer until Herdr's
+Install and fully configure herdr-agent-usage on this computer until Herdr's
 Agent sidebar shows brand icons and quota for the agent CLIs I actually have.
 Stopping after ./install.sh is not done. Icons as boxes or "?" are unfinished.
 
-Repo: https://github.com/levi-qiao/herdr-agent-quota
+Repo: https://github.com/levi-qiao/herdr-agent-usage
 If this working tree is already that repo, use it; otherwise clone it, cd in,
 and follow docs/agent-setup.md (English) or docs/agent-setup.zh-CN.md (中文).
 If you cannot read those files, do all of the following anyway.
@@ -110,7 +117,7 @@ Rules:
    Read the full output. font: notes and missing integrations are remaining work.
 
 4. After the script:
-   - herdr plugin list must show herdr-agent-quota enabled.
+   - herdr plugin list must show herdr-agent-usage enabled.
    - Wait for configure/refresh logs to succeed (invoke returns while running).
    - herdr integration status; for each detected agent that is "not installed",
      herdr integration install <id> (claude, codex, grok, opencode, pi, omp,
@@ -121,7 +128,7 @@ Rules:
      (TERM_PROGRAM / KITTY_WINDOW_ID / WEZTERM_EXECUTABLE). PUA U+E1A0–U+E1B6
      needs an explicit map or the cell is a box or "?". Ghostty:
      font-codepoint-map = U+E1A0-U+E1B6="Herdr Agent Icons Max" (and U+E1C0–U+E1C5),
-     wrapped in "# BEGIN/END herdr-agent-quota font". kitty: symbol_map those
+     wrapped in "# BEGIN/END herdr-agent-usage font". kitty: symbol_map those
      ranges to Herdr Agent Icons Max. WezTerm: add the family to font_with_fallback.
      VS Code/Cursor: append it to terminal.integrated.fontFamily. Then reload
      the terminal (Ghostty cmd+shift+,, kitty ctrl+shift+f5). Muse's mark is ◈
@@ -130,10 +137,10 @@ Rules:
      used ZWNJ — upgrade.
    - macOS Cursor: if ~/.cursor/cli-config.json has authInfo and
      ~/.cursor/.herdr-keychain-approved is missing, warn the user, then
-     ./target/release/herdr-agent-quota refresh --provider cursor --keychain-approve --force
+     ./target/release/herdr-agent-usage refresh --provider cursor --keychain-approve --force
      and tell them to click Always Allow (not Allow).
    - macOS Muse keychain login: same with --provider muse.
-   - herdr plugin action invoke refresh --plugin herdr-agent-quota and wait.
+   - herdr plugin action invoke refresh --plugin herdr-agent-usage and wait.
    - Tell me which already-running panes to restart (new hooks/integrations).
      Claude/Agy need one turn for StatusLine. Cursor cache needs a turn after
      hooks.json is reloaded.
@@ -148,7 +155,7 @@ Rules:
 Press `prefix+shift+q`, or run the following if that key is already assigned:
 
 ```sh
-herdr plugin pane open --plugin herdr-agent-quota --entrypoint settings --focus
+herdr plugin pane open --plugin herdr-agent-usage --entrypoint settings --focus
 ```
 
 <img src="docs/screenshots/settings.png" alt="Agent quota settings" width="760">
@@ -218,8 +225,8 @@ turn failures into zero usage.
 | Claude/Agy quota is missing | Send a turn so the session's StatusLine produces an observation |
 | OMP quota is missing | Check `omp usage --json --redact --provider <id>` |
 | Devin quota is missing | Check the CLI login and `DEVIN_CREDENTIALS_FILE` if customized |
-| Muse quota is missing | Run `muse login` (API-key logins have no subscription quota); check `MUSE_AUTH_PATH` if customized. On macOS, a `storage: "keychain"` login also needs a one-time Keychain approval: run `herdr-agent-quota refresh --provider muse --keychain-approve` and click **Always Allow** |
-| Cursor quota is missing or stuck on a previous account | Run `cursor login`. On macOS, `cursor-agent login` stores the token in Keychain: run `herdr-agent-quota refresh --provider cursor --keychain-approve` and click **Always Allow**. The desktop app token is only used when the CLI has no login of its own **and** `$CURSOR_STATE_DB` is set |
+| Muse quota is missing | Run `muse login` (API-key logins have no subscription quota); check `MUSE_AUTH_PATH` if customized. On macOS, a `storage: "keychain"` login also needs a one-time Keychain approval: run `herdr-agent-usage refresh --provider muse --keychain-approve` and click **Always Allow** |
+| Cursor quota is missing or stuck on a previous account | Run `cursor login`. On macOS, `cursor-agent login` stores the token in Keychain: run `herdr-agent-usage refresh --provider cursor --keychain-approve` and click **Always Allow**. The desktop app token is only used when the CLI has no login of its own **and** `$CURSOR_STATE_DB` is set |
 | Ghostty asks to "access data from other apps" while using Cursor | macOS `SystemPolicyAppData`: a Ghostty child touched Cursor-owned files (`~/.cursor` or Application Support). This plugin does not open those trees on macOS unless `$CURSOR_HOME` / `$CURSOR_AUTH_FILE` / `$CURSOR_STATE_DB` is set. Cursor CLI itself may still prompt (it writes under `~/Library/Caches`). Click **Allow**, or grant Ghostty Files & Folders / Full Disk Access. **Don't Allow** makes later reads fail closed. Reload the plugin after upgrading so the watcher is the new binary. |
 | Cursor cache/context is missing | `cx` comes from that session's `store.db`; cache still needs the pane to have reloaded `hooks.json` and sent a turn (headless `--print` does not fire those hooks) |
 | Rows are missing | Run the configure action below to repair managed configuration |
@@ -228,8 +235,8 @@ turn failures into zero usage.
 | Cache details stay on two lines under `gauges` | Widen the sidebar until the combined row fits |
 
 ```sh
-herdr plugin action invoke refresh --plugin herdr-agent-quota
-herdr plugin action invoke configure --plugin herdr-agent-quota
+herdr plugin action invoke refresh --plugin herdr-agent-usage
+herdr plugin action invoke configure --plugin herdr-agent-usage
 ```
 
 Uninstall everything with `./uninstall.sh`, or remove a subset with

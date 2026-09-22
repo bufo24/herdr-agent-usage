@@ -223,7 +223,7 @@ fn fetch_from_process(
         1,
         "initialize",
         serde_json::json!({
-            "clientInfo": {"name": "herdr-agent-quota", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": crate::identity::PLUGIN_ID, "version": env!("CARGO_PKG_VERSION")},
             "capabilities": {}
         }),
     )?;

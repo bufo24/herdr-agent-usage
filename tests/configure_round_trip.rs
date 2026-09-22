@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 
 fn isolated_plugin_command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-agent-usage"));
     command.env_remove("HERDR_SOCKET_PATH");
     command
 }
@@ -175,10 +175,10 @@ fn sidebar_configuration_is_idempotent_and_removes_plugin_rows() {
     let applied = add_quota_row(original).unwrap();
     assert!(applied.contains("key = \"prefix+shift+r\""));
     assert!(applied.contains("type = \"plugin_action\""));
-    assert!(applied.contains("command = \"herdr-agent-quota.refresh\""));
+    assert!(applied.contains("command = \"herdr-agent-usage.refresh\""));
     assert!(applied.contains("key = \"prefix+shift+q\""));
-    assert!(applied.contains("command = \"herdr-agent-quota.open-settings\""));
-    assert!(applied.contains("agent_panel_sort = \"spaces\" # herdr-agent-quota"));
+    assert!(applied.contains("command = \"herdr-agent-usage.open-settings\""));
+    assert!(applied.contains("agent_panel_sort = \"spaces\" # herdr-agent-usage"));
     assert_eq!(add_quota_row(&applied).unwrap(), applied);
     assert_eq!(
         remove_quota_row(&applied).unwrap(),
@@ -200,7 +200,7 @@ fn sidebar_configuration_preserves_a_conflicting_refresh_key() {
     let applied = add_quota_row(original).unwrap();
     assert_eq!(applied.matches("key = \"prefix+shift+r\"").count(), 1);
     assert!(applied.contains("command = \"echo user-owned\""));
-    assert!(!applied.contains("command = \"herdr-agent-quota.refresh\""));
+    assert!(!applied.contains("command = \"herdr-agent-usage.refresh\""));
     assert_eq!(
         remove_quota_row(&applied).unwrap(),
         "[[keys.command]]\nkey = \"prefix+shift+r\"\ntype = \"shell\"\ncommand = \"echo user-owned\"\ndescription = \"user refresh\"\n\n[ui]\n\n[ui.sidebar.agents]\nrows = [[\"state_icon\", \"machine\", \"workspace\", \"tab\"], [\"agent\"]]\n"
@@ -221,11 +221,11 @@ fn sidebar_configuration_preserves_a_conflicting_settings_key() {
     let applied = add_quota_row(original).unwrap();
     assert_eq!(applied.matches("key = \"prefix+shift+q\"").count(), 1);
     assert!(applied.contains("command = \"echo user-owned\""));
-    assert!(!applied.contains("command = \"herdr-agent-quota.open-settings\""));
-    assert!(applied.contains("command = \"herdr-agent-quota.refresh\""));
+    assert!(!applied.contains("command = \"herdr-agent-usage.open-settings\""));
+    assert!(applied.contains("command = \"herdr-agent-usage.refresh\""));
     let removed = remove_quota_row(&applied).unwrap();
     assert!(removed.contains("command = \"echo user-owned\""));
-    assert!(!removed.contains("herdr-agent-quota.refresh"));
+    assert!(!removed.contains("herdr-agent-usage.refresh"));
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     assert!(!applied.contains("$quota_5h_label"));
     assert!(!applied.contains("$quota_5h_eta"));
     assert!(!applied.contains("fg = \"#c8cdd6\""));
-    assert!(applied.contains("row_gap = 0 # herdr-agent-quota"));
+    assert!(applied.contains("row_gap = 0 # herdr-agent-usage"));
     assert!(applied.find("$quota_topic").unwrap() < applied.find("$quota_5h_normal").unwrap());
     assert!(applied.contains("fg = \"#82d978\""));
     assert!(applied.contains("fg = \"#e4b957\""));
@@ -529,11 +529,11 @@ fn sidebar_configuration_preserves_an_explicit_row_gap() {
 fn sidebar_configuration_keeps_plugin_owned_gap_packed() {
     let original = concat!(
         "[ui.sidebar.agents]\n",
-        "row_gap = 1 # herdr-agent-quota\n",
+        "row_gap = 1 # herdr-agent-usage\n",
         "rows = [[\"state_icon\", \"agent\"]]\n"
     );
     let applied = add_quota_row(original).unwrap();
-    assert!(applied.contains("row_gap = 0 # herdr-agent-quota"));
+    assert!(applied.contains("row_gap = 0 # herdr-agent-usage"));
     assert!(!applied.contains("row_gap = 1"));
 }
 
@@ -2722,15 +2722,15 @@ fn cursor_collector_hooks_preserve_herdr_session_start() {
         .success());
     let hooks = fs::read_to_string(&homes.cursor_hooks).unwrap();
     assert!(hooks.contains("herdr-agent-state.sh"));
-    assert!(hooks.contains("herdr-agent-quota-hooks.sh"));
+    assert!(hooks.contains("herdr-agent-usage-hooks.sh"));
     assert!(hooks.contains("afterAgentResponse"));
     assert!(hooks.contains("preCompact"));
-    let script = homes.state.join("herdr-agent-quota-hooks.sh");
+    let script = homes.state.join("herdr-agent-usage-hooks.sh");
     let leftover = homes
         .cursor_hooks
         .parent()
         .unwrap()
-        .join("herdr-agent-quota-hooks.sh");
+        .join("herdr-agent-usage-hooks.sh");
     assert!(!leftover.exists(), "{leftover:?}");
     let script_text = fs::read_to_string(&script).unwrap();
     assert!(script_text.contains("cursor-hooks"));
@@ -2745,7 +2745,7 @@ fn cursor_collector_hooks_preserve_herdr_session_start() {
         .success());
     let hooks = fs::read_to_string(&homes.cursor_hooks).unwrap();
     assert!(hooks.contains("herdr-agent-state.sh"));
-    assert!(!hooks.contains("herdr-agent-quota-hooks.sh"));
+    assert!(!hooks.contains("herdr-agent-usage-hooks.sh"));
     assert!(!script.exists());
 }
 
@@ -2965,11 +2965,11 @@ fn flush_row_gap_is_persisted_across_a_repair() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(homes.sidebar().contains("row_gap = 0 # herdr-agent-quota"));
+    assert!(homes.sidebar().contains("row_gap = 0 # herdr-agent-usage"));
 
     assert!(homes.configure(&["--apply"]).status.success());
     assert!(
-        homes.sidebar().contains("row_gap = 0 # herdr-agent-quota"),
+        homes.sidebar().contains("row_gap = 0 # herdr-agent-usage"),
         "repair dropped flush gap: {}",
         homes.sidebar()
     );
@@ -2978,7 +2978,7 @@ fn flush_row_gap_is_persisted_across_a_repair() {
         .configure(&["--apply", "--row-gap", "1"])
         .status
         .success());
-    assert!(homes.sidebar().contains("row_gap = 0 # herdr-agent-quota"));
+    assert!(homes.sidebar().contains("row_gap = 0 # herdr-agent-usage"));
     assert!(!homes.sidebar().contains("row_gap = 1"));
 }
 
@@ -3002,7 +3002,7 @@ fn an_installer_can_select_flush_gap_through_the_plugin_config_dir() {
     let sidebar = homes.sidebar();
     assert!(sidebar_is_stacked(&sidebar), "{sidebar}");
     assert!(
-        sidebar.contains("row_gap = 0 # herdr-agent-quota"),
+        sidebar.contains("row_gap = 0 # herdr-agent-usage"),
         "{sidebar}"
     );
 }
@@ -3108,7 +3108,7 @@ fn a_full_uninstall_of_a_gauges_install_restores_the_original_config() {
     assert!(sidebar_is_gauges(&homes.sidebar()), "{}", homes.sidebar());
     assert!(fs::read_to_string(&terminal_config)
         .unwrap()
-        .contains("# BEGIN herdr-agent-quota font"));
+        .contains("# BEGIN herdr-agent-usage font"));
     assert!(fs::read_dir(&font_dir).unwrap().next().is_some());
 
     assert!(homes.configure(&["--uninstall"]).status.success());

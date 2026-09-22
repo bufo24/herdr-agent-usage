@@ -6,12 +6,13 @@
 //! setting replaces the native CLI footer.
 //!
 //! The wrapper script lives in plugin state, not next to `hooks.json`.
-//! `bash ~/.cursor/herdr-agent-quota-hooks.sh` is a Ghostty-attributed open of
+//! `bash ~/.cursor/<id>-hooks.sh` is a Ghostty-attributed open of
 //! a Cursor-provenance tree and prompts `SystemPolicyAppData` twice per turn
 //! (`afterAgentResponse` then `stop`). `hooks.json` itself stays where Cursor
 //! CLI reads it.
 
 use crate::cache::CacheStore;
+use crate::identity::{self, PLUGIN_ID};
 use crate::providers::cursor;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -20,9 +21,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MANAGED_SUBCOMMAND: &str = "cursor-hooks";
-const SCRIPT_NAME: &str = "herdr-agent-quota-hooks.sh";
-const SCRIPT_MARKER: &str = "managed by herdr-agent-quota";
 const HOOK_EVENTS: [&str; 3] = ["afterAgentResponse", "stop", "preCompact"];
+
+fn script_name() -> String {
+    identity::hooks_script_name(PLUGIN_ID)
+}
 
 pub fn check() -> Result<()> {
     let path = hooks_path()?;
@@ -53,11 +56,17 @@ pub fn uninstall() -> Result<()> {
 
 pub fn apply_at(path: &Path, state: &Path, executable: &Path) -> Result<()> {
     crate::providers::cursor::migrate_legacy_keychain_marker(state);
-    let script = state.join(SCRIPT_NAME);
+    let script = state.join(script_name());
     write_wrapper_script(&script, state, executable)?;
-    let leftover = legacy_script_path(path);
-    if leftover != script {
-        remove_wrapper_script(&leftover);
+    for id in identity::all_plugin_ids() {
+        let leftover_home = legacy_script_path_for(path, id);
+        if leftover_home != script {
+            remove_wrapper_script(&leftover_home);
+        }
+        let leftover_state = state.join(identity::hooks_script_name(id));
+        if leftover_state != script {
+            remove_wrapper_script(&leftover_state);
+        }
     }
     let command = wrapper_command(&script);
     let mut root = read_hooks(path)?;
@@ -71,8 +80,11 @@ pub fn apply_at(path: &Path, state: &Path, executable: &Path) -> Result<()> {
 }
 
 pub fn uninstall_at(path: &Path, state: &Path) -> Result<()> {
-    remove_wrapper_script(&state.join(SCRIPT_NAME));
-    remove_wrapper_script(&legacy_script_path(path));
+    remove_wrapper_script(&state.join(script_name()));
+    for id in identity::all_plugin_ids() {
+        remove_wrapper_script(&state.join(identity::hooks_script_name(id)));
+        remove_wrapper_script(&legacy_script_path_for(path, id));
+    }
     if !path.exists() {
         return Ok(());
     }
@@ -124,11 +136,11 @@ pub(crate) fn hooks_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".cursor/hooks.json"))
 }
 
-fn legacy_script_path(hooks: &Path) -> PathBuf {
+fn legacy_script_path_for(hooks: &Path, id: &str) -> PathBuf {
     hooks
         .parent()
-        .map(|parent| parent.join(SCRIPT_NAME))
-        .unwrap_or_else(|| PathBuf::from(SCRIPT_NAME))
+        .map(|parent| parent.join(identity::hooks_script_name(id)))
+        .unwrap_or_else(|| PathBuf::from(identity::hooks_script_name(id)))
 }
 
 fn wrapper_command(script: &Path) -> String {
@@ -140,7 +152,8 @@ fn write_wrapper_script(script: &Path, state: &Path, executable: &Path) -> Resul
         fs::create_dir_all(parent).context("create Cursor hooks directory")?;
     }
     let contents = format!(
-        "#!/bin/sh\n# {SCRIPT_MARKER}; reinstalling the collector replaces this file.\nexport HERDR_PLUGIN_STATE_DIR={}\nexec {} {MANAGED_SUBCOMMAND}\n",
+        "#!/bin/sh\n# {}; reinstalling the collector replaces this file.\nexport HERDR_PLUGIN_STATE_DIR={}\nexec {} {MANAGED_SUBCOMMAND}\n",
+        identity::managed_by(PLUGIN_ID),
         shell_quote(state),
         shell_quote(executable),
     );
@@ -161,15 +174,20 @@ fn remove_wrapper_script(script: &Path) {
     let Ok(contents) = fs::read_to_string(script) else {
         return;
     };
-    if contents.contains(SCRIPT_MARKER) && contents.contains(MANAGED_SUBCOMMAND) {
+    if wrapper_is_ours(&contents) {
         let _ = fs::remove_file(script);
     }
 }
 
+fn wrapper_is_ours(contents: &str) -> bool {
+    contents.contains(MANAGED_SUBCOMMAND)
+        && identity::all_plugin_ids().any(|id| contents.contains(&identity::managed_by(id)))
+}
+
 fn is_ours(command: &str) -> bool {
-    command.contains(SCRIPT_NAME)
+    identity::all_plugin_ids().any(|id| command.contains(&identity::hooks_script_name(id)))
         || (command.contains(MANAGED_SUBCOMMAND)
-            && (command.contains("herdr-agent-quota")
+            && (identity::command_mentions_us(command)
                 || command.contains("HERDR_PLUGIN_STATE_DIR=")))
 }
 
@@ -273,7 +291,7 @@ fn write_hooks(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("create Cursor hooks directory")?;
     }
-    let temporary = path.with_extension("json.herdr-agent-quota.tmp");
+    let temporary = path.with_extension(format!("json.{PLUGIN_ID}.tmp"));
     fs::write(&temporary, serde_json::to_vec_pretty(value)?).context("write Cursor hooks.json")?;
     fs::rename(&temporary, path).context("replace Cursor hooks.json")
 }
@@ -309,10 +327,10 @@ mod tests {
         let session = &value["hooks"]["sessionStart"][0]["command"];
         assert_eq!(session, "bash '/tmp/herdr-agent-state.sh' session");
         assert!(
-            !home.join(SCRIPT_NAME).exists(),
+            !home.join(script_name()).exists(),
             "bash ~/.cursor/hook.sh prompts Ghostty TCC twice per turn"
         );
-        let script_text = fs::read_to_string(state.join(SCRIPT_NAME)).unwrap();
+        let script_text = fs::read_to_string(state.join(script_name())).unwrap();
         assert!(script_text.contains("HERDR_PLUGIN_STATE_DIR="));
         assert!(script_text.contains("/opt/herdr-agent-quota"));
         assert!(script_text.contains(MANAGED_SUBCOMMAND));
@@ -320,7 +338,7 @@ mod tests {
             let command = value["hooks"][event][0]["command"].as_str().unwrap();
             assert!(command.contains("bash"));
             assert!(command.contains(state.to_str().unwrap()));
-            assert!(command.contains(SCRIPT_NAME));
+            assert!(command.contains(&script_name()));
             assert!(!command.contains("cursor-home"));
             assert!(!command.contains("HERDR_PLUGIN_STATE_DIR="));
         }
@@ -353,10 +371,10 @@ mod tests {
             .collect();
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0], "echo user");
-        assert!(commands[1].contains(SCRIPT_NAME));
+        assert!(commands[1].contains(&script_name()));
         assert!(commands[1].contains("plugin-state"));
         assert!(!commands[1].contains("/old/herdr-agent-quota"));
-        let script_text = fs::read_to_string(state.join(SCRIPT_NAME)).unwrap();
+        let script_text = fs::read_to_string(state.join(script_name())).unwrap();
         assert!(script_text.contains("/new/herdr-agent-quota"));
     }
 
@@ -384,7 +402,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("hooks.json");
         apply_at(&path, dir.path(), Path::new("/opt/herdr-agent-quota")).unwrap();
-        let script = dir.path().join(SCRIPT_NAME);
+        let script = dir.path().join(script_name());
         assert!(script.exists());
         uninstall_at(&path, dir.path()).unwrap();
         assert!(!path.exists());
@@ -398,10 +416,10 @@ mod tests {
         let state = dir.path().join("plugin-state");
         fs::create_dir_all(&home).unwrap();
         let path = home.join("hooks.json");
-        let leftover = home.join(SCRIPT_NAME);
+        let leftover = home.join(identity::hooks_script_name("herdr-agent-quota"));
         fs::write(&leftover, "# managed by herdr-agent-quota\ncursor-hooks\n").unwrap();
         apply_at(&path, &state, Path::new("/opt/herdr-agent-quota")).unwrap();
         assert!(!leftover.exists());
-        assert!(state.join(SCRIPT_NAME).is_file());
+        assert!(state.join(script_name()).is_file());
     }
 }

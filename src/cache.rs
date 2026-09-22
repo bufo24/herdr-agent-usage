@@ -1,6 +1,7 @@
 use crate::cli::{
     AgentOrder, BrandColors, FieldSet, LowQuotaAlert, PercentStyle, SidebarLayout, SidebarRowGap,
 };
+use crate::identity::PLUGIN_ID;
 use crate::model::{
     merge_omitted_window_list, window_in, BillingTarget, ContextUsage, Provider, ProviderSnapshot,
     UsageWindow, WindowKind,
@@ -65,7 +66,7 @@ impl CacheStore {
         let root = std::env::var_os("HERDR_PLUGIN_STATE_DIR")
             .map(PathBuf::from)
             .or_else(|| {
-                ProjectDirs::from("dev", "herdr", "herdr-agent-quota")
+                ProjectDirs::from("dev", "herdr", PLUGIN_ID)
                     .map(|dirs| dirs.data_local_dir().to_path_buf())
             })
             .context("cannot determine plugin state directory")?;
