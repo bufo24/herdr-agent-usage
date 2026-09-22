@@ -1,3 +1,4 @@
+use crate::cache::CacheStore;
 use crate::identity::{self, PLUGIN_ID};
 use crate::model::{ContextUsage, Harness, Provider};
 use crate::presentation::{MetadataTokens, RowStyle, SidebarShape};
@@ -485,7 +486,7 @@ pub fn find_agent_pane(pane_id: &str) -> Result<Option<AgentPane>> {
         return Ok(None);
     };
     let mut panes = [pane];
-    attach_muse_sessions(&mut panes);
+    attach_missing_sessions(&mut panes);
     let [pane] = panes;
     Ok(Some(pane))
 }
@@ -505,8 +506,83 @@ pub fn find_agent_icon_panes(pane_ids: &[&str]) -> Result<Vec<AgentPane>> {
 /// Herdr has no Muse session integration, so a Muse pane arrives without a
 /// session. Resolve it from Muse's own session lock; a session Herdr does
 /// report is always kept as-is.
+fn attach_missing_sessions(panes: &mut [AgentPane]) {
+    attach_muse_sessions(panes);
+    attach_codex_sessions(panes);
+}
+
 fn attach_muse_sessions(panes: &mut [AgentPane]) {
     attach_muse_sessions_with(panes, crate::providers::muse::session_ids_for_panes);
+}
+
+/// Codex hooks normally report a session id. A wrapper can disable those
+/// hooks while leaving Herdr's foreground cwd intact, so use the rollout's
+/// exact session_meta cwd only when one missing pane and one rollout agree.
+pub fn attach_codex_sessions(panes: &mut [AgentPane]) {
+    let candidates = panes
+        .iter()
+        .filter(|pane| pane.harness == Harness::Codex && pane.session.is_none())
+        .filter_map(|pane| {
+            codex_process_started_at(&pane.pane_id)
+                .map(|started_at| (pane.pane_id.clone(), pane.cwd.clone(), started_at))
+        })
+        .collect::<Vec<_>>();
+    let resolved = crate::providers::codex::session_ids_for_panes(&candidates);
+    for pane in panes {
+        if pane.harness != Harness::Codex || pane.session.is_some() {
+            continue;
+        }
+        if let Some(session_id) = resolved.get(&pane.pane_id) {
+            pane.session = Some(AgentSession {
+                kind: Some("id".to_string()),
+                value: session_id.clone(),
+            });
+        }
+    }
+}
+
+fn codex_process_started_at(pane_id: &str) -> Option<u64> {
+    let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let output = Command::new(executable)
+        .args(["pane", "process-info", "--pane", pane_id])
+        .output()
+        .ok()?;
+    let value: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let process = value
+        .pointer("/result/process_info/foreground_processes")?
+        .as_array()?
+        .iter()
+        .find(|process| {
+            process
+                .get("argv")
+                .and_then(Value::as_array)
+                .and_then(|argv| argv.first())
+                .and_then(Value::as_str)
+                .is_some_and(|argv0| argv0 == "codex" || argv0.ends_with("/codex"))
+        })?;
+    let pid = process.get("pid")?.as_u64()?.to_string();
+    let elapsed = Command::new("ps")
+        .args(["-p", &pid, "-o", "etime="])
+        .output()
+        .ok()?;
+    let seconds = parse_ps_elapsed(&String::from_utf8_lossy(&elapsed.stdout))?;
+    Some(CacheStore::now_unix().saturating_sub(seconds))
+}
+
+fn parse_ps_elapsed(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let (days, clock) = if let Some((days, clock)) = value.split_once('-') {
+        (days.parse::<u64>().ok()?, clock)
+    } else {
+        (0, value)
+    };
+    let mut seconds = 0_u64;
+    for part in clock.split(':') {
+        seconds = seconds
+            .checked_mul(60)?
+            .checked_add(part.parse::<u64>().ok()?)?;
+    }
+    (clock.split(':').count() >= 2).then_some(days * 86_400 + seconds)
 }
 
 fn attach_muse_sessions_with(
@@ -703,8 +779,13 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                         .map(AgentStatus::parse)
                         .unwrap_or_default();
                     let focused = map.get("focused").and_then(Value::as_bool).unwrap_or(false);
-                    let cwd = map
-                        .get("cwd")
+                    // Codex rollouts record the native foreground process's
+                    // cwd. Other collectors keep the pane cwd contract they
+                    // already use.
+                    let cwd = (harness == Harness::Codex)
+                        .then(|| map.get("foreground_cwd"))
+                        .flatten()
+                        .or_else(|| map.get("cwd"))
                         .or_else(|| map.get("foreground_cwd"))
                         .and_then(Value::as_str)
                         .unwrap_or_default()
@@ -3036,6 +3117,19 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn foreground_cwd_is_preferred_for_a_wrapped_agent_process() {
+        let value = json!({"result": {"agents": [{
+            "pane_id": "w1:p1",
+            "agent": "codex",
+            "cwd": "/project",
+            "foreground_cwd": "/treehouse/project"
+        }]}});
+        let mut panes = Vec::new();
+        collect_agent_panes(&value, &mut panes);
+        assert_eq!(panes[0].cwd, "/treehouse/project");
     }
 
     /// Herdr reports at most 16 metadata tokens per pane. A snapshot that

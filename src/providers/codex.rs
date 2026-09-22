@@ -192,6 +192,94 @@ pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
     result
 }
 
+const PROCESS_SESSION_START_TOLERANCE_SECONDS: u64 = 90;
+
+/// Bind missing Herdr sessions by a Codex process start time as well as the
+/// rollout's exact cwd. Treehouse worktrees can be reused, so cwd alone is
+/// deliberately insufficient once more than one rollout names it.
+pub fn session_ids_for_panes(panes: &[(String, String, u64)]) -> BTreeMap<String, String> {
+    let Some(home) = codex_home().ok() else {
+        return BTreeMap::new();
+    };
+    session_ids_for_panes_at(&home, panes)
+}
+
+fn session_ids_for_panes_at(
+    home: &Path,
+    panes: &[(String, String, u64)],
+) -> BTreeMap<String, String> {
+    let wanted = panes
+        .iter()
+        .filter(|(_, cwd, _)| !cwd.is_empty())
+        .map(|(_, cwd, _)| cwd.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut by_cwd = BTreeMap::<String, Vec<(String, u64)>>::new();
+    let mut directories = vec![home.join("sessions"), home.join("archived_sessions")];
+    while let Some(directory) = directories.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            if !file_type.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            let Some((session_id, cwd, started_at)) = rollout_session_meta_with_started_at(&path)
+            else {
+                continue;
+            };
+            if wanted.contains(cwd.as_str())
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(session_id.as_str())
+            {
+                by_cwd
+                    .entry(cwd)
+                    .or_default()
+                    .push((session_id, started_at));
+            }
+        }
+    }
+    panes
+        .iter()
+        .filter_map(|(pane_id, cwd, process_started_at)| {
+            let candidates = by_cwd.get(cwd)?;
+            let mut matches = candidates.iter().filter(|(_, rollout_started_at)| {
+                rollout_started_at.abs_diff(*process_started_at)
+                    <= PROCESS_SESSION_START_TOLERANCE_SECONDS
+            });
+            let (session_id, _) = matches.next()?;
+            matches
+                .next()
+                .is_none()
+                .then(|| (pane_id.clone(), session_id.clone()))
+        })
+        .collect()
+}
+
+fn rollout_session_meta_with_started_at(path: &Path) -> Option<(String, String, u64)> {
+    let file = fs::File::open(path).ok()?;
+    let line = BufReader::new(file).lines().next()?.ok()?;
+    let entry = serde_json::from_str::<Value>(&line).ok()?;
+    (entry.get("type").and_then(Value::as_str) == Some("session_meta")).then_some(())?;
+    let payload = entry.get("payload")?;
+    let session_id = payload.get("id")?.as_str()?.trim();
+    let cwd = payload.get("cwd")?.as_str()?.trim();
+    let started_at = parse_rollout_timestamp(&entry)?;
+    (!session_id.is_empty() && !cwd.is_empty())
+        .then(|| (session_id.to_string(), cwd.to_string(), started_at))
+}
+
 /// Kill the app-server's process group and reap it, at most once.
 ///
 /// Whichever of the request thread and the watchdog gets here first takes the
@@ -977,6 +1065,31 @@ mod tests {
         assert_eq!(snapshot.model.as_deref(), Some("gpt-5.6"));
         assert!(snapshot.session_contexts.contains_key("session-1"));
         assert!(!snapshot.session_contexts.contains_key("other-session"));
+    }
+
+    #[test]
+    fn resolves_a_reused_cwd_only_when_the_process_start_matches_one_rollout() {
+        let directory = tempfile::tempdir().unwrap();
+        let rollouts = directory.path().join("sessions/2026/09/22");
+        fs::create_dir_all(&rollouts).unwrap();
+        for (id, timestamp) in [
+            ("old", "1970-01-01T00:01:40Z"),
+            ("live", "1970-01-01T00:16:40Z"),
+        ] {
+            fs::write(
+                rollouts.join(format!("rollout-{id}.jsonl")),
+                serde_json::json!({"type":"session_meta", "timestamp": timestamp,
+                    "payload":{"id":id,"cwd":"/treehouse/reused"}})
+                .to_string()
+                    + "\n",
+            )
+            .unwrap();
+        }
+        let resolved = session_ids_for_panes_at(
+            directory.path(),
+            &[("w1:p1".to_string(), "/treehouse/reused".to_string(), 1_002)],
+        );
+        assert_eq!(resolved.get("w1:p1").map(String::as_str), Some("live"));
     }
 
     #[test]

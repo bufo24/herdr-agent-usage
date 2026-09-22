@@ -20,6 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Codex panes launched through wrappers that suppress Codex hooks now recover
+  their session from a unique exact match between Herdr's foreground cwd and a
+  rollout's `session_meta`. Their model and context therefore stay with that
+  session instead of borrowing the newest provider-wide rollout. Ambiguous
+  cwd matches remain unresolved.
 - OpenCode 2 sessions resolve again. OpenCode 2 keeps new sessions in
   `session_v2`/`session_message` and carries the role in the `type` column,
   neither of which the collector read: every session created after the upgrade
