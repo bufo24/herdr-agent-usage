@@ -386,6 +386,49 @@ list will not name the new field. `FieldSet::parse` has to keep reading that
 exact legacy list as `all()`, and `as_list` needs a marker for the one new
 selection that would collide with it.
 
+## Code Review Rules
+
+For pull-request review, prioritize semantic correctness over whether the happy-path
+tests pass. Treat the following as repository-specific invariants and call out
+violations explicitly:
+
+1. **Current means current.** Model, context, quota, cache, topic, and session
+   fields presented as live/current must come from the newest applicable
+   observation. Do not substitute a rollout/file head, an old cache entry, or a
+   historical session value just because it is easier to read.
+2. **Attribution must be provable.** Never merge or reuse quota, cache, model, or
+   session data across accounts, credential scopes, providers, or sessions
+   unless the code has evidence that they are the same billing/serving target.
+   On ambiguity, prefer missing data over confidently wrong data.
+3. **Bounded reads must preserve the requested semantics.** Prefix reads are fine
+   for immutable metadata written at the start of a file; latest/current fields
+   require a bounded tail or reverse scan, an equivalent seekable snapshot, or
+   no value. A performance bound must not silently change "latest" into "first".
+4. **Multiple files can be one logical record.** When upstream storage has plain,
+   compressed, migrated, temporary, or otherwise alternate representations of
+   the same logical object, follow upstream's canonical precedence and make
+   transition behavior deterministic. Do not let directory iteration order or
+   mtime ties decide correctness.
+5. **Pane reads and metadata writes are side effects.** Reject changes that add
+   broad pane scans, duplicate publish passes, or no-op metadata writes to
+   event/watch/focus paths unless the behavior is explicitly required and
+   measured. Preserve the one-pane/event and publish-once invariants above.
+6. **Credential stores stay least-privilege.** New code must not broaden secret
+   reads, copy credential databases, prompt from background processes, or use a
+   less-specific credential scope just to make attribution easier.
+7. **Compatibility lists are append-only contracts.** Changes to harnesses,
+   providers, sidebar fields, token names, or persisted selection formats must
+   preserve ordering/backward-compatibility rules documented in this file and
+   include regression coverage for old saved state.
+8. **Test representation transitions and stale-data traps.** For storage/cache
+   changes, cover both representations when applicable, ambiguous/equal
+   timestamps, corrupt or partial data, reused sessions/worktrees, and cases
+   where an older value exists but must not be reported as current.
+
+A review should distinguish blocking correctness/attribution/privacy regressions
+from non-blocking cleanup or performance suggestions. Green CI is evidence, not
+a substitute for checking these invariants.
+
 ## Verifying
 
 ```
