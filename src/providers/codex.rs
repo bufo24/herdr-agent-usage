@@ -7,7 +7,7 @@ use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const FIVE_HOUR_WINDOW_MINUTES: u64 = 5 * 60;
 const WEEKLY_WINDOW_MINUTES: u64 = 7 * 24 * 60;
 const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
+/// Session identity is the first JSONL record. Bound a malformed first line.
+const ROLLOUT_META_LINE_BYTES: u64 = 64 * 1024;
+/// Zstd is not seekable here. Decode forward within this budget while keeping
+/// only the recent records; beyond it, omit diagnostics rather than show an
+/// old model or context as current.
+const ROLLOUT_COMPRESSED_DECODE_BYTES: u64 = 64 * 1024 * 1024;
+const ROLLOUT_COMPRESSED_TAIL_BYTES: usize = 8 * 1024 * 1024;
 /// How far back from EOF to look for the latest `turn_context` when the tail
 /// has none. Codex writes that event at turn start, then tool calls and
 /// `token_count` lines; a long turn can push the model several megabytes
@@ -359,9 +366,10 @@ fn rollouts_started_near(home: &Path, starts: impl Iterator<Item = u64>) -> Vec<
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.ends_with(".jsonl")
+            if is_rollout_file(&name)
                 && prefixes.iter().any(|prefix| name.starts_with(prefix))
                 && entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && !has_plain_sibling(&entry.path())
             {
                 paths.push(entry.path());
             }
@@ -371,8 +379,14 @@ fn rollouts_started_near(home: &Path, starts: impl Iterator<Item = u64>) -> Vec<
 }
 
 fn rollout_session_meta_with_started_at(path: &Path) -> Option<(String, String, u64)> {
-    let file = fs::File::open(path).ok()?;
-    let line = BufReader::new(file).lines().next()?.ok()?;
+    let line = if is_compressed_rollout(path) {
+        let file = fs::File::open(path).ok()?;
+        let decoder = zstd::stream::read::Decoder::new(file).ok()?;
+        first_rollout_line(decoder)?
+    } else {
+        let file = fs::File::open(path).ok()?;
+        first_rollout_line(file)?
+    };
     let entry = serde_json::from_str::<Value>(&line).ok()?;
     (entry.get("type").and_then(Value::as_str) == Some("session_meta")).then_some(())?;
     let payload = entry.get("payload")?;
@@ -381,6 +395,13 @@ fn rollout_session_meta_with_started_at(path: &Path) -> Option<(String, String, 
     let started_at = parse_rollout_timestamp(&entry)?;
     (!session_id.is_empty() && !cwd.is_empty())
         .then(|| (session_id.to_string(), cwd.to_string(), started_at))
+}
+
+fn first_rollout_line(reader: impl Read) -> Option<String> {
+    let mut reader = BufReader::new(reader).take(ROLLOUT_META_LINE_BYTES + 1);
+    let mut bytes = Vec::new();
+    reader.read_until(b'\n', &mut bytes).ok()?;
+    (bytes.len() <= ROLLOUT_META_LINE_BYTES as usize).then(|| String::from_utf8(bytes).ok())?
 }
 
 /// Kill the app-server's process group and reap it, at most once.
@@ -549,9 +570,10 @@ fn find_rollout_paths(home: &Path, session_ids: &[String]) -> BTreeMap<String, P
                 directories.push(path);
                 continue;
             }
-            if !file_type.is_file()
-                || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
-            {
+            if !file_type.is_file() || !is_rollout_file(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            if has_plain_sibling(&path) {
                 continue;
             }
             let name = entry.file_name();
@@ -586,7 +608,52 @@ struct RolloutObservation {
     context: Option<ContextUsage>,
 }
 
+fn is_rollout_file(name: &str) -> bool {
+    name.ends_with(".jsonl") || name.ends_with(".jsonl.zst")
+}
+
+fn is_compressed_rollout(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with(".jsonl.zst"))
+}
+
+fn has_plain_sibling(path: &Path) -> bool {
+    is_compressed_rollout(path) && path.with_extension("").is_file()
+}
+
+fn read_compressed_tail(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut decoder = zstd::stream::read::Decoder::new(file).ok()?;
+    let mut tail = VecDeque::new();
+    let mut decoded = 0_u64;
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = decoder.read(&mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        decoded += read as u64;
+        if decoded > ROLLOUT_COMPRESSED_DECODE_BYTES {
+            return None;
+        }
+        tail.extend(&chunk[..read]);
+        if tail.len() > ROLLOUT_COMPRESSED_TAIL_BYTES {
+            tail.drain(..tail.len() - ROLLOUT_COMPRESSED_TAIL_BYTES);
+        }
+    }
+    let bytes = tail.into_iter().collect::<Vec<_>>();
+    let text = String::from_utf8_lossy(&bytes);
+    if decoded > bytes.len() as u64 {
+        Some(text.split_once('\n')?.1.to_string())
+    } else {
+        Some(text.into_owned())
+    }
+}
+
 fn read_rollout_observation(path: &Path, session_id: &str) -> Option<RolloutObservation> {
+    if is_compressed_rollout(path) {
+        return parse_rollout_observation(&read_compressed_tail(path)?, session_id);
+    }
     let mut file = fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
     let start = length.saturating_sub(ROLLOUT_TAIL_BYTES);
@@ -1580,5 +1647,140 @@ mod tests {
             snapshot.session_models.get("session-1").map(String::as_str),
             Some("gpt-6-astra")
         );
+    }
+
+    fn compressed_rollout(path: &Path) -> Vec<u8> {
+        let bytes = zstd::stream::encode_all(
+            include_bytes!("../../tests/fixtures/codex/rollout-prefix.jsonl").as_slice(),
+            0,
+        )
+        .unwrap();
+        fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    fn set_modified(path: &Path, seconds: u64) {
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn compressed_rollout_is_discovered_and_binds_its_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let day = directory.path().join("sessions/2026/09/22");
+        fs::create_dir_all(&day).unwrap();
+        let compressed = day.join("rollout-2026-09-22T07-01-40-session-compressed.jsonl.zst");
+        compressed_rollout(&compressed);
+        fs::write(day.join("rollout-other.jsonl"), b"\n").unwrap();
+
+        assert_eq!(
+            session_ids_for_panes_at(
+                directory.path(),
+                &[("pane-1".into(), "/workspace".into(), 1_790_082_100)],
+            )
+            .get("pane-1")
+            .map(String::as_str),
+            Some("session-compressed")
+        );
+        assert_eq!(
+            find_rollout_paths(directory.path(), &["session-compressed".into()])
+                .get("session-compressed"),
+            Some(&compressed)
+        );
+    }
+
+    #[test]
+    fn plain_sibling_wins_even_when_compressed_is_newer() {
+        let directory = tempfile::tempdir().unwrap();
+        let day = directory.path().join("sessions/2026/09/22");
+        fs::create_dir_all(&day).unwrap();
+        let plain = day.join("rollout-2026-09-22T07-01-40-session-compressed.jsonl");
+        fs::write(
+            &plain,
+            b"{\"timestamp\":\"2026-09-22T13:01:40Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-compressed\",\"cwd\":\"/workspace\"}}\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-terra\"}}\n",
+        )
+        .unwrap();
+        let compressed = day.join("rollout-2026-09-22T07-01-40-session-compressed.jsonl.zst");
+        compressed_rollout(&compressed);
+
+        set_modified(&plain, 100);
+        set_modified(&compressed, 200);
+        let mut snapshot = ProviderSnapshot::new(Provider::Codex, vec![], 1);
+        enrich_local_sessions_at(
+            &mut snapshot,
+            directory.path(),
+            &["session-compressed".into()],
+        );
+        assert_eq!(
+            snapshot
+                .session_models
+                .get("session-compressed")
+                .map(String::as_str),
+            Some("gpt-5.6-terra")
+        );
+        assert!(snapshot.context.is_none());
+        assert_eq!(
+            find_rollout_paths(directory.path(), &["session-compressed".into()])
+                .get("session-compressed"),
+            Some(&plain)
+        );
+        assert_eq!(
+            rollouts_started_near(directory.path(), std::iter::once(1_790_082_100)),
+            vec![plain.clone()]
+        );
+
+        set_modified(&plain, 300);
+        assert_eq!(
+            find_rollout_paths(directory.path(), &["session-compressed".into()])
+                .get("session-compressed"),
+            Some(&plain)
+        );
+    }
+
+    #[test]
+    fn damaged_compressed_rollout_falls_back_like_unreadable_plain_rollout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("rollout-session-compressed.jsonl.zst");
+        let bytes = compressed_rollout(&path);
+        fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(read_rollout_observation(&path, "session-compressed").is_none());
+        fs::write(&path, b"not a zstd frame").unwrap();
+        assert!(read_rollout_observation(&path, "session-compressed").is_none());
+        assert!(read_rollout_observation(
+            &directory.path().join("unreadable.jsonl"),
+            "session-compressed"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn compressed_reader_uses_latest_model_and_context_beyond_prefix_and_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("rollout-session-compressed.jsonl.zst");
+        let mut source =
+            include_str!("../../tests/fixtures/codex/rollout-prefix.jsonl").to_string();
+        let filler = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"ignored\"}}\n";
+        while source.len() < 256 * 1024 {
+            source.push_str(filler);
+        }
+        source.push_str("{\"type\":\"turn_context\",\"payload\":{\"model\":\"later-model\"}}\n");
+        source.push_str("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":60000},\"model_context_window\":100000}}}\n");
+        let tail_floor = source.len() + ROLLOUT_TAIL_BYTES as usize + filler.len();
+        pad_jsonl(&mut source, tail_floor, filler);
+        fs::write(
+            &path,
+            zstd::stream::encode_all(source.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let observation = read_rollout_observation(&path, "session-compressed").unwrap();
+        assert_eq!(observation.model.as_deref(), Some("later-model"));
+        assert!((observation.context.unwrap().used_percent - 54.5454).abs() < 0.001);
     }
 }
