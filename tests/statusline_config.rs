@@ -186,10 +186,8 @@ fn direct_configuration_write_refuses_an_ambiguous_cache_directory() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("must run through Herdr"));
 }
 
-/// The plugin id rename left Claude's statusLine running the old binary into
-/// the old state directory. `check` must not call that hook installed: this
-/// install never receives an observation from it, so every new session's
-/// model and quota render blank.
+/// Claude's documented config directory relocates settings as well as
+/// credentials, so check/apply/uninstall must not silently fall back to HOME.
 #[test]
 fn claude_check_resolves_settings_under_claude_config_dir() {
     let directory = tempdir().unwrap();
@@ -230,6 +228,10 @@ fn claude_check_resolves_settings_under_claude_config_dir() {
     assert!(stdout.contains(profile.to_str().unwrap()), "{stdout}");
 }
 
+/// The plugin id rename left Claude's statusLine running the old binary into
+/// the old state directory. `check` must not call that hook installed: this
+/// install never receives an observation from it, so every new session's
+/// model and quota render blank.
 #[test]
 fn check_reports_a_statusline_that_feeds_the_pre_rename_install_as_stale() {
     let directory = tempdir().unwrap();
