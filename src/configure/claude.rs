@@ -1,12 +1,13 @@
-use super::statusline::{settings_path, Adapter};
+use super::statusline::Adapter;
 use crate::cache::{CacheStore, DEFAULT_WATCH_INTERVAL_SECONDS};
 use crate::model::Provider;
 use crate::presentation::pace_segment;
 use crate::providers::claude::parse_statusline;
+use crate::providers::statusline::api_generation;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const CONFIG: Adapter = Adapter {
     label: "Claude",
@@ -14,11 +15,22 @@ const CONFIG: Adapter = Adapter {
     backup_file: "claude-statusline.original.json",
 };
 
+fn claude_settings_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("CLAUDE_SETTINGS_FILE") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(directory) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Ok(PathBuf::from(directory).join("settings.json"));
+    }
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".claude/settings.json"))
+}
+
 pub fn check() -> Result<()> {
     let cache = CacheStore::from_env()?;
     let executable = std::env::current_exe().context("resolve plugin executable")?;
     CONFIG.check(
-        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        &claude_settings_path()?,
         cache.root(),
         &executable,
     )
@@ -28,7 +40,7 @@ pub fn apply() -> Result<()> {
     let cache = CacheStore::from_env()?;
     let executable = std::env::current_exe().context("resolve plugin executable")?;
     apply_at_with_refresh_interval(
-        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        &claude_settings_path()?,
         cache.root(),
         &executable,
         cache.watch_interval_seconds(),
@@ -39,7 +51,7 @@ pub fn apply_with_refresh_interval(refresh_interval_seconds: u64) -> Result<()> 
     let cache = CacheStore::from_env()?;
     let executable = std::env::current_exe().context("resolve plugin executable")?;
     apply_at_with_refresh_interval(
-        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        &claude_settings_path()?,
         cache.root(),
         &executable,
         refresh_interval_seconds,
@@ -49,7 +61,7 @@ pub fn apply_with_refresh_interval(refresh_interval_seconds: u64) -> Result<()> 
 pub fn uninstall() -> Result<()> {
     let cache = CacheStore::from_env()?;
     uninstall_at(
-        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        &claude_settings_path()?,
         cache.root(),
     )
 }
@@ -80,7 +92,13 @@ pub fn run_statusline_hook() -> Result<()> {
         if let Ok(snapshot) = parse_statusline(&value, now_unix) {
             pace = pace_segment(&snapshot.windows, now_unix);
             if let Ok(cache) = CacheStore::from_env() {
-                let _ = cache.save_statusline_observation(Provider::Claude, snapshot, &value);
+                let generation = api_generation(&value);
+                let _ = cache.save_statusline_observation_with_api_generation(
+                    Provider::Claude,
+                    snapshot,
+                    &value,
+                    generation.as_deref(),
+                );
             }
         }
     }
