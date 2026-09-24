@@ -108,7 +108,9 @@ pub fn api_generation(value: &Value) -> Option<String> {
     // scalar fields rather than serializing the current_usage object itself.
     // Object key order is not part of Claude's statusLine contract.
     let field = |object: Option<&serde_json::Map<String, Value>>, snake: &str, camel: &str| {
-        object.and_then(|object| object.get(snake).or_else(|| object.get(camel)))
+        object
+            .and_then(|object| object.get(snake).or_else(|| object.get(camel)))
+            .cloned()
     };
     let evidence = serde_json::json!([
         field(cost, "total_api_duration_ms", "totalApiDurationMs"),
