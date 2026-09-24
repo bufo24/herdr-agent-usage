@@ -873,6 +873,76 @@ fn idle_claude_statusline_tick_does_not_change_another_sessions_quota() {
 }
 
 #[test]
+fn replayed_idle_claude_quota_becomes_stale_instead_of_looking_current() {
+    let state = tempdir().unwrap();
+    let profile = state.path().join("claude-profile");
+    fs::create_dir_all(&profile).unwrap();
+    let (herdr_stub, herdr_log) = install_herdr_stub(
+        state.path(),
+        r#"{"result":{"agents":[
+            {"agent":"claude","pane_id":"w1:p1","agent_session":{"value":"session-c"}},
+            {"agent":"claude","pane_id":"w2:p1","agent_session":{"value":"session-a"}}
+        ]}}"#,
+    );
+    let reset = future_reset_unix();
+    run_claude_collector_with_config_dir(
+        state.path(),
+        &herdr_stub,
+        claude_statusline_windows("session-c", 5.0, None, reset).as_bytes(),
+        Some(&profile),
+    );
+    run_claude_collector_with_config_dir(
+        state.path(),
+        &herdr_stub,
+        claude_statusline_windows("session-a", 92.0, None, reset).as_bytes(),
+        Some(&profile),
+    );
+
+    // Age only session-c's production-written observation. The following
+    // statusLine tick is an identical timer replay, so it must not refresh
+    // that timestamp.
+    let mailbox = state.path().join("claude-statusline.observation.json");
+    let mut observation: serde_json::Value =
+        serde_json::from_slice(&fs::read(&mailbox).unwrap()).unwrap();
+    let old = CacheStore::now_unix().saturating_sub(3 * 60);
+    for meta in observation["snapshot"]["session_quota_observations"]["session-c"]
+        .as_array_mut()
+        .unwrap()
+    {
+        meta["observed_at_unix"] = serde_json::json!(old);
+    }
+    fs::write(&mailbox, serde_json::to_vec(&observation).unwrap()).unwrap();
+
+    run_claude_collector_with_config_dir(
+        state.path(),
+        &herdr_stub,
+        claude_statusline_windows("session-c", 5.0, None, reset).as_bytes(),
+        Some(&profile),
+    );
+    run_claude_refresh(state.path(), &herdr_stub);
+
+    let report = fs::read_to_string(herdr_log).unwrap();
+    let idle_report = report
+        .lines()
+        .find(|line| line.contains("w1:p1"))
+        .expect("idle pane reported");
+    let live_report = report
+        .lines()
+        .find(|line| line.contains("w2:p1"))
+        .expect("live pane reported");
+    assert!(
+        idle_report.contains("quota_5h_unknown=5h stale"),
+        "{idle_report}"
+    );
+    assert!(!idle_report.contains("5h 95%"), "{idle_report}");
+    assert!(!idle_report.contains("quota_headroom=095"), "{idle_report}");
+    assert!(
+        live_report.contains("quota_5h_danger=5h 8%"),
+        "{live_report}"
+    );
+}
+
+#[test]
 fn claude_new_session_without_rate_limits_cannot_borrow_profile_quota() {
     let state = tempdir().unwrap();
     let profile = state.path().join("claude-profile");
