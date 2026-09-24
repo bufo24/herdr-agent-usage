@@ -780,6 +780,25 @@ impl ProviderSnapshot {
         }
     }
 
+    /// Return freshness evidence for one Claude session-local quota window.
+    ///
+    /// Other providers and non-session-local snapshots deliberately have no
+    /// observation record here.
+    pub fn quota_observation_for_session(
+        &self,
+        session_id: Option<&str>,
+        kind: WindowKind,
+    ) -> Option<&SessionQuotaObservation> {
+        if self.provider != Provider::Claude || !self.session_quota_only {
+            return None;
+        }
+        let session_id = session_id.and_then(|id| self.session_for_lookup(id))?;
+        self.session_quota_observations
+            .get(session_id)?
+            .iter()
+            .find(|observation| observation.kind == kind)
+    }
+
     /// Return the quota windows for a pane's session.
     ///
     /// Context and model are session-local. Grok, Codex, and Devin have
@@ -796,21 +815,6 @@ impl ProviderSnapshot {
     /// 5. Every keyed map is empty → top-level windows (Grok/Codex/Devin and a
     ///    StatusLine cache written before session maps existed).
     /// 6. Keyed maps exist but this session is unknown → empty.
-    pub fn quota_observation_for_session(
-        &self,
-        session_id: Option<&str>,
-        kind: WindowKind,
-    ) -> Option<&SessionQuotaObservation> {
-        if self.provider != Provider::Claude || !self.session_quota_only {
-            return None;
-        }
-        let session_id = session_id.and_then(|id| self.session_for_lookup(id))?;
-        self.session_quota_observations
-            .get(session_id)?
-            .iter()
-            .find(|observation| observation.kind == kind)
-    }
-
     pub fn windows_for_session(&self, session_id: Option<&str>) -> &[UsageWindow] {
         if self.provider == Provider::Agy && session_id.is_none() {
             return &self.windows;
