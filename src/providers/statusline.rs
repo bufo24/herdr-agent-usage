@@ -318,11 +318,17 @@ mod tests {
 
         let mut prompt_only = base.clone();
         prompt_only["prompt_id"] = json!("prompt-b");
-        assert_eq!(api_generation(&prompt_only).as_deref(), Some(first.as_str()));
+        assert_eq!(
+            api_generation(&prompt_only).as_deref(),
+            Some(first.as_str())
+        );
 
         let mut next_response = base.clone();
         next_response["cost"]["total_api_duration_ms"] = json!(1800);
-        assert_ne!(api_generation(&next_response).as_deref(), Some(first.as_str()));
+        assert_ne!(
+            api_generation(&next_response).as_deref(),
+            Some(first.as_str())
+        );
 
         assert_eq!(api_generation(&json!({"prompt_id":"only-a-prompt"})), None);
     }
