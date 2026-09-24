@@ -275,12 +275,12 @@ impl MetadataTokens {
         let five_hour = window_in(windows, WindowKind::FiveHour);
         let weekly = window_in(windows, WindowKind::Weekly);
         let monthly = window_in(windows, WindowKind::Monthly);
-        let five_hour_stale =
-            five_hour.and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::FiveHour, now_unix));
-        let weekly_stale =
-            weekly.and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Weekly, now_unix));
-        let monthly_stale =
-            monthly.and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Monthly, now_unix));
+        let five_hour_stale = five_hour
+            .and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::FiveHour, now_unix));
+        let weekly_stale = weekly
+            .and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Weekly, now_unix));
+        let monthly_stale = monthly
+            .and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Monthly, now_unix));
         let has_stale_quota =
             five_hour_stale.is_some() || weekly_stale.is_some() || monthly_stale.is_some();
         Self {
@@ -844,8 +844,7 @@ mod tests {
 
     #[test]
     fn stale_claude_session_quota_is_visible_but_cannot_claim_headroom() {
-        let mut snapshot =
-            ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
+        let mut snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
         snapshot.session_windows.insert(
             "session-a".to_string(),
             vec![window(WindowKind::FiveHour, 92.0, 14_820)],
@@ -884,8 +883,7 @@ mod tests {
 
     #[test]
     fn legacy_claude_session_quota_has_unknown_age_instead_of_looking_live() {
-        let mut snapshot =
-            ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
+        let mut snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
         snapshot.session_windows.insert(
             "session-a".to_string(),
             vec![window(WindowKind::FiveHour, 5.0, 14_820)],
