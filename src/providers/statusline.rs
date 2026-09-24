@@ -107,9 +107,7 @@ pub fn api_generation(value: &Value) -> Option<String> {
     // Keep the fingerprint canonical: hash a fixed-order tuple of documented
     // scalar fields rather than serializing the current_usage object itself.
     // Object key order is not part of Claude's statusLine contract.
-    let field = |object: Option<&serde_json::Map<String, Value>>,
-                 snake: &str,
-                 camel: &str| {
+    let field = |object: Option<&serde_json::Map<String, Value>>, snake: &str, camel: &str| {
         object.and_then(|object| object.get(snake).or_else(|| object.get(camel)))
     };
     let evidence = serde_json::json!([
