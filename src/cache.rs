@@ -2161,6 +2161,217 @@ mod tests {
     }
 
     #[test]
+    fn claude_timer_replay_does_not_refresh_quota_observation_time() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let payload = json!({"session_id":"session-a"});
+
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![five_hour(5.0, 16_000)],
+                    100,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-a"),
+            )
+            .unwrap();
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![five_hour(5.0, 16_000)],
+                    300,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-a"),
+            )
+            .unwrap();
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        let observation = saved
+            .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+            .unwrap();
+        assert_eq!(observation.observed_at_unix, Some(100));
+        assert_eq!(observation.api_generation.as_deref(), Some("generation-a"));
+    }
+
+    #[test]
+    fn a_new_api_generation_refreshes_an_unchanged_claude_quota() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let payload = json!({"session_id":"session-a"});
+
+        for (at, generation) in [(100, "generation-a"), (300, "generation-b")] {
+            cache
+                .save_statusline_observation_with_api_generation(
+                    Provider::Claude,
+                    ProviderSnapshot::new(
+                        Provider::Claude,
+                        vec![five_hour(5.0, 16_000)],
+                        at,
+                    )
+                    .session_local(),
+                    &payload,
+                    Some(generation),
+                )
+                .unwrap();
+        }
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        let observation = saved
+            .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+            .unwrap();
+        assert_eq!(observation.observed_at_unix, Some(300));
+        assert_eq!(observation.api_generation.as_deref(), Some("generation-b"));
+    }
+
+    #[test]
+    fn omitted_claude_window_keeps_its_own_observation_age() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let payload = json!({"session_id":"session-a"});
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![five_hour(22.0, 2_000), weekly(65.0, 10_000)],
+                    100,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-a"),
+            )
+            .unwrap();
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![weekly(66.0, 10_000)],
+                    300,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-b"),
+            )
+            .unwrap();
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert!(window_in(
+            saved.windows_for_session(Some("session-a")),
+            WindowKind::FiveHour
+        )
+        .is_some());
+        assert_eq!(
+            saved
+                .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+                .unwrap()
+                .observed_at_unix,
+            Some(100)
+        );
+        assert_eq!(
+            saved
+                .quota_observation_for_session(Some("session-a"), WindowKind::Weekly)
+                .unwrap()
+                .observed_at_unix,
+            Some(300)
+        );
+    }
+
+    #[test]
+    fn legacy_claude_quota_stays_unknown_until_new_evidence_arrives() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        cache.ensure().unwrap();
+
+        let mut legacy =
+            ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 100)
+                .session_local();
+        legacy
+            .session_windows
+            .insert("session-a".to_string(), legacy.windows.clone());
+        let payload = json!({"session_id":"session-a"});
+        let stored = StatuslineObservation {
+            snapshot: legacy,
+            payload: payload.clone(),
+        };
+        fs::write(
+            cache.statusline_observation_path(Provider::Claude),
+            serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![five_hour(5.0, 16_000)],
+                    200,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-a"),
+            )
+            .unwrap();
+        let baseline = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        let observation = baseline
+            .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+            .unwrap();
+        assert_eq!(observation.observed_at_unix, None);
+        assert_eq!(observation.api_generation.as_deref(), Some("generation-a"));
+
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(
+                    Provider::Claude,
+                    vec![five_hour(5.0, 16_000)],
+                    300,
+                )
+                .session_local(),
+                &payload,
+                Some("generation-b"),
+            )
+            .unwrap();
+        let refreshed = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert_eq!(
+            refreshed
+                .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+                .unwrap()
+                .observed_at_unix,
+            Some(300)
+        );
+    }
+
+    #[test]
     fn statusline_refresh_preserves_previous_cache_diagnostics_when_current_usage_is_missing() {
         let directory = tempdir().unwrap();
         let cache = CacheStore::new(directory.path());
