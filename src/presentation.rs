@@ -281,13 +281,8 @@ impl MetadataTokens {
             weekly.and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Weekly, now_unix));
         let monthly_stale =
             monthly.and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Monthly, now_unix));
-        let fresh_windows = windows
-            .iter()
-            .filter(|window| {
-                stale_quota_age(snapshot, session_id, window.kind, now_unix).is_none()
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let has_stale_quota =
+            five_hour_stale.is_some() || weekly_stale.is_some() || monthly_stale.is_some();
         Self {
             quota_provider_model,
             quota_provider: if narrow_identity && !quota_model.is_empty() {
@@ -347,7 +342,15 @@ impl MetadataTokens {
             quota_cache_ttl: sidebar_cache_ttl(context, now_unix),
             quota_cache_state: sidebar_cache_state(context, now_unix),
             quota_error: None,
-            quota_headroom: headroom(&fresh_windows, fields),
+            // Once any displayed Claude window is stale, there is no current
+            // provider headroom to sort or use for alert recovery. Returning
+            // None also preserves an already-fired low-quota alert until a
+            // genuinely fresh observation can re-arm it.
+            quota_headroom: if has_stale_quota {
+                None
+            } else {
+                headroom(windows, fields)
+            },
         }
     }
 
