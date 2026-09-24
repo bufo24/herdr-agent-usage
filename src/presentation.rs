@@ -281,8 +281,10 @@ impl MetadataTokens {
             .and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Weekly, now_unix));
         let monthly_stale = monthly
             .and_then(|_| stale_quota_age(snapshot, session_id, WindowKind::Monthly, now_unix));
-        let has_stale_quota =
-            five_hour_stale.is_some() || weekly_stale.is_some() || monthly_stale.is_some();
+        let has_stale_quota = (fields.contains(SidebarField::FiveHour)
+            && five_hour_stale.is_some())
+            || (fields.contains(SidebarField::Week) && weekly_stale.is_some())
+            || (fields.contains(SidebarField::Month) && monthly_stale.is_some());
         Self {
             quota_provider_model,
             quota_provider: if narrow_identity && !quota_model.is_empty() {
@@ -879,6 +881,44 @@ mod tests {
         assert_eq!(fresh.quota_5h, "5h 8% 4h03m");
         assert_eq!(fresh.quota_5h_severity, Some(Severity::Danger));
         assert_eq!(fresh.quota_headroom, Some(8));
+    }
+
+    #[test]
+    fn a_hidden_stale_claude_window_does_not_suppress_visible_fresh_headroom() {
+        let mut snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
+        snapshot.session_windows.insert(
+            "session-a".to_string(),
+            vec![
+                window(WindowKind::FiveHour, 20.0, 14_820),
+                window(WindowKind::Weekly, 95.0, 90_000),
+            ],
+        );
+        snapshot.session_quota_observations.insert(
+            "session-a".to_string(),
+            vec![
+                SessionQuotaObservation {
+                    kind: WindowKind::FiveHour,
+                    observed_at_unix: Some(250),
+                    api_generation: Some("generation-fresh".to_string()),
+                },
+                SessionQuotaObservation {
+                    kind: WindowKind::Weekly,
+                    observed_at_unix: Some(100),
+                    api_generation: Some("generation-old".to_string()),
+                },
+            ],
+        );
+
+        let values = MetadataTokens::from_snapshot_for_pane_with_fields(
+            &snapshot,
+            300,
+            Some("session-a"),
+            PercentStyle::Remaining,
+            SidebarShape::default(),
+            FieldSet::parse("5h").unwrap(),
+        );
+        assert_eq!(values.quota_5h, "5h 80% 4h02m");
+        assert_eq!(values.quota_headroom, Some(80));
     }
 
     #[test]
