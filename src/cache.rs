@@ -322,13 +322,7 @@ impl CacheStore {
         observation: &Value,
         quota_scope: Option<&str>,
     ) -> Result<()> {
-        self.save_statusline_observation_inner(
-            provider,
-            snapshot,
-            observation,
-            quota_scope,
-            None,
-        )
+        self.save_statusline_observation_inner(provider, snapshot, observation, quota_scope, None)
     }
 
     fn save_statusline_observation_inner(
@@ -1065,12 +1059,14 @@ fn merge_session_quota_observations(
         let previous_observation = previous_observations
             .iter()
             .find(|observation| observation.kind == window.kind);
-        let previous_generation = previous_observation
-            .and_then(|observation| observation.api_generation.as_deref());
+        let previous_generation =
+            previous_observation.and_then(|observation| observation.api_generation.as_deref());
 
         let observed_at_unix = match (previous_window, previous_observation) {
             (None, _) => Some(snapshot.fetched_at_unix),
-            (Some(previous_window), _) if previous_window != window => Some(snapshot.fetched_at_unix),
+            (Some(previous_window), _) if previous_window != window => {
+                Some(snapshot.fetched_at_unix)
+            }
             (Some(_), Some(previous_observation))
                 if api_generation.is_some() && api_generation != previous_generation =>
             {
@@ -1083,9 +1079,9 @@ fn merge_session_quota_observations(
             (Some(_), None) => None,
         };
 
-        let stored_generation = api_generation
-            .map(str::to_string)
-            .or_else(|| previous_observation.and_then(|observation| observation.api_generation.clone()));
+        let stored_generation = api_generation.map(str::to_string).or_else(|| {
+            previous_observation.and_then(|observation| observation.api_generation.clone())
+        });
 
         if let Some(existing) = observations
             .iter_mut()
@@ -1309,7 +1305,10 @@ fn prune_session_diagnostics(snapshot: &mut ProviderSnapshot, current_session_id
     prune_session_map(&mut snapshot.session_models, current_session_ids);
     prune_session_map(&mut snapshot.session_contexts, current_session_ids);
     prune_session_map(&mut snapshot.session_windows, current_session_ids);
-    prune_session_map(&mut snapshot.session_quota_observations, current_session_ids);
+    prune_session_map(
+        &mut snapshot.session_quota_observations,
+        current_session_ids,
+    );
     prune_session_map(&mut snapshot.session_quota_scopes, current_session_ids);
     snapshot.quota_scope_windows.retain(|scope, _| {
         snapshot
@@ -2175,12 +2174,8 @@ mod tests {
         cache
             .save_statusline_observation_with_api_generation(
                 Provider::Claude,
-                ProviderSnapshot::new(
-                    Provider::Claude,
-                    vec![five_hour(5.0, 16_000)],
-                    100,
-                )
-                .session_local(),
+                ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 100)
+                    .session_local(),
                 &payload,
                 Some("generation-a"),
             )
@@ -2188,12 +2183,8 @@ mod tests {
         cache
             .save_statusline_observation_with_api_generation(
                 Provider::Claude,
-                ProviderSnapshot::new(
-                    Provider::Claude,
-                    vec![five_hour(5.0, 16_000)],
-                    300,
-                )
-                .session_local(),
+                ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 300)
+                    .session_local(),
                 &payload,
                 Some("generation-a"),
             )
@@ -2221,12 +2212,8 @@ mod tests {
             cache
                 .save_statusline_observation_with_api_generation(
                     Provider::Claude,
-                    ProviderSnapshot::new(
-                        Provider::Claude,
-                        vec![five_hour(5.0, 16_000)],
-                        at,
-                    )
-                    .session_local(),
+                    ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], at)
+                        .session_local(),
                     &payload,
                     Some(generation),
                 )
@@ -2266,12 +2253,8 @@ mod tests {
         cache
             .save_statusline_observation_with_api_generation(
                 Provider::Claude,
-                ProviderSnapshot::new(
-                    Provider::Claude,
-                    vec![weekly(66.0, 10_000)],
-                    300,
-                )
-                .session_local(),
+                ProviderSnapshot::new(Provider::Claude, vec![weekly(66.0, 10_000)], 300)
+                    .session_local(),
                 &payload,
                 Some("generation-b"),
             )
@@ -2309,9 +2292,8 @@ mod tests {
         let cache = CacheStore::new(directory.path());
         cache.ensure().unwrap();
 
-        let mut legacy =
-            ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 100)
-                .session_local();
+        let mut legacy = ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 100)
+            .session_local();
         legacy
             .session_windows
             .insert("session-a".to_string(), legacy.windows.clone());
@@ -2329,12 +2311,8 @@ mod tests {
         cache
             .save_statusline_observation_with_api_generation(
                 Provider::Claude,
-                ProviderSnapshot::new(
-                    Provider::Claude,
-                    vec![five_hour(5.0, 16_000)],
-                    200,
-                )
-                .session_local(),
+                ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 200)
+                    .session_local(),
                 &payload,
                 Some("generation-a"),
             )
@@ -2353,12 +2331,8 @@ mod tests {
         cache
             .save_statusline_observation_with_api_generation(
                 Provider::Claude,
-                ProviderSnapshot::new(
-                    Provider::Claude,
-                    vec![five_hour(5.0, 16_000)],
-                    300,
-                )
-                .session_local(),
+                ProviderSnapshot::new(Provider::Claude, vec![five_hour(5.0, 16_000)], 300)
+                    .session_local(),
                 &payload,
                 Some("generation-b"),
             )
