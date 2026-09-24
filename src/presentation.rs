@@ -843,6 +843,67 @@ mod tests {
     }
 
     #[test]
+    fn stale_claude_session_quota_is_visible_but_cannot_claim_headroom() {
+        let mut snapshot =
+            ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
+        snapshot.session_windows.insert(
+            "session-a".to_string(),
+            vec![window(WindowKind::FiveHour, 92.0, 14_820)],
+        );
+        snapshot.session_quota_observations.insert(
+            "session-a".to_string(),
+            vec![SessionQuotaObservation {
+                kind: WindowKind::FiveHour,
+                observed_at_unix: Some(100),
+                api_generation: Some("generation-a".to_string()),
+            }],
+        );
+
+        let stale = MetadataTokens::from_snapshot_for_pane(
+            &snapshot,
+            400,
+            Some("session-a"),
+            PercentStyle::Remaining,
+            SidebarShape::default(),
+        );
+        assert_eq!(stale.quota_5h, "5h stale 5m");
+        assert_eq!(stale.quota_5h_severity, Some(Severity::Unknown));
+        assert_eq!(stale.quota_headroom, None);
+
+        let fresh = MetadataTokens::from_snapshot_for_pane(
+            &snapshot,
+            200,
+            Some("session-a"),
+            PercentStyle::Remaining,
+            SidebarShape::default(),
+        );
+        assert_eq!(fresh.quota_5h, "5h 8% 4h03m");
+        assert_eq!(fresh.quota_5h_severity, Some(Severity::Danger));
+        assert_eq!(fresh.quota_headroom, Some(8));
+    }
+
+    #[test]
+    fn legacy_claude_session_quota_has_unknown_age_instead_of_looking_live() {
+        let mut snapshot =
+            ProviderSnapshot::new(Provider::Claude, vec![], 100).session_local();
+        snapshot.session_windows.insert(
+            "session-a".to_string(),
+            vec![window(WindowKind::FiveHour, 5.0, 14_820)],
+        );
+
+        let values = MetadataTokens::from_snapshot_for_pane(
+            &snapshot,
+            400,
+            Some("session-a"),
+            PercentStyle::Remaining,
+            SidebarShape::default(),
+        );
+        assert_eq!(values.quota_5h, "5h stale");
+        assert_eq!(values.quota_5h_severity, Some(Severity::Unknown));
+        assert_eq!(values.quota_headroom, None);
+    }
+
+    #[test]
     fn headroom_rounds_down_so_a_window_never_crosses_a_threshold_early() {
         let snapshot = ProviderSnapshot::new(
             Provider::Claude,
@@ -907,7 +968,7 @@ mod tests {
         assert!(!sidebar.quota_week.contains("30d"), "{sidebar:?}");
     }
     use super::*;
-    use crate::model::{ProviderSnapshot, UsageWindow};
+    use crate::model::{ProviderSnapshot, SessionQuotaObservation, UsageWindow};
 
     fn window(kind: WindowKind, used: f64, reset: u64) -> UsageWindow {
         UsageWindow::new(kind, used, Some(ResetAt::from_unix_seconds(reset))).unwrap()
