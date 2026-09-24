@@ -102,24 +102,28 @@ pub fn api_generation(value: &Value) -> Option<String> {
                 .get("current_usage")
                 .or_else(|| context.get("currentUsage"))
         })
-        .filter(|value| !value.is_null());
+        .and_then(Value::as_object);
 
+    // Keep the fingerprint canonical: hash a fixed-order tuple of documented
+    // scalar fields rather than serializing the current_usage object itself.
+    // Object key order is not part of Claude's statusLine contract.
+    let field = |object: Option<&serde_json::Map<String, Value>>,
+                 snake: &str,
+                 camel: &str| {
+        object.and_then(|object| object.get(snake).or_else(|| object.get(camel)))
+    };
     let evidence = serde_json::json!([
-        cost.and_then(|cost| {
-            cost.get("total_api_duration_ms")
-                .or_else(|| cost.get("totalApiDurationMs"))
-        }),
-        context.and_then(|context| {
-            context
-                .get("total_input_tokens")
-                .or_else(|| context.get("totalInputTokens"))
-        }),
-        context.and_then(|context| {
-            context
-                .get("total_output_tokens")
-                .or_else(|| context.get("totalOutputTokens"))
-        }),
-        current,
+        field(cost, "total_api_duration_ms", "totalApiDurationMs"),
+        field(context, "total_input_tokens", "totalInputTokens"),
+        field(context, "total_output_tokens", "totalOutputTokens"),
+        field(current, "input_tokens", "inputTokens"),
+        field(current, "output_tokens", "outputTokens"),
+        field(
+            current,
+            "cache_creation_input_tokens",
+            "cacheCreationInputTokens"
+        ),
+        field(current, "cache_read_input_tokens", "cacheReadInputTokens"),
     ]);
     let has_evidence = evidence
         .as_array()
@@ -320,6 +324,14 @@ mod tests {
         prompt_only["prompt_id"] = json!("prompt-b");
         assert_eq!(
             api_generation(&prompt_only).as_deref(),
+            Some(first.as_str())
+        );
+
+        let mut unrelated_current_usage_field = base.clone();
+        unrelated_current_usage_field["context_window"]["current_usage"]["future_field"] =
+            json!("ignored");
+        assert_eq!(
+            api_generation(&unrelated_current_usage_field).as_deref(),
             Some(first.as_str())
         );
 
