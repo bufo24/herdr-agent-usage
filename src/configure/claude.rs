@@ -29,11 +29,7 @@ fn claude_settings_path() -> Result<PathBuf> {
 pub fn check() -> Result<()> {
     let cache = CacheStore::from_env()?;
     let executable = std::env::current_exe().context("resolve plugin executable")?;
-    CONFIG.check(
-        &claude_settings_path()?,
-        cache.root(),
-        &executable,
-    )
+    CONFIG.check(&claude_settings_path()?, cache.root(), &executable)
 }
 
 pub fn apply() -> Result<()> {
@@ -60,10 +56,7 @@ pub fn apply_with_refresh_interval(refresh_interval_seconds: u64) -> Result<()> 
 
 pub fn uninstall() -> Result<()> {
     let cache = CacheStore::from_env()?;
-    uninstall_at(
-        &claude_settings_path()?,
-        cache.root(),
-    )
+    uninstall_at(&claude_settings_path()?, cache.root())
 }
 
 pub fn apply_at(settings: &Path, state: &Path, executable: &Path) -> Result<()> {
