@@ -779,6 +779,13 @@ fn claude_panes_on_the_same_profile_keep_their_own_observations() {
     let state = tempdir().unwrap();
     let profile = state.path().join("claude-profile");
     fs::create_dir_all(&profile).unwrap();
+    // Claude's global account metadata is a hint, not serving-account proof.
+    // Even a plausible UUID must not authorize cross-session quota sharing.
+    fs::write(
+        profile.join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"same-looking-account","organizationUuid":"org-1"}}"#,
+    )
+    .unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
         state.path(),
         r#"{"result":{"agents":[
