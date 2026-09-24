@@ -1119,6 +1119,12 @@ fn merge_session_windows(
         let previous = previous.filter(|previous| previous.session_quota_only);
         if let Some(previous) = previous {
             snapshot.session_windows = previous.session_windows.clone();
+            for (session_id, observations) in &previous.session_quota_observations {
+                snapshot
+                    .session_quota_observations
+                    .entry(session_id.clone())
+                    .or_insert_with(|| observations.clone());
+            }
         }
         if let Some(id) = session_id {
             // A statusLine tick that omits `five_hour` is not a report that the
