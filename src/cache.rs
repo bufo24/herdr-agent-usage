@@ -1131,11 +1131,24 @@ fn merge_session_windows(
                 previous.and_then(|previous| previous_windows_for_merge(previous, id, None))
             {
                 let previous_windows = previous_windows.to_vec();
-                merge_omitted_window_list(
-                    &mut snapshot.windows,
-                    &previous_windows,
-                    snapshot.fetched_at_unix,
-                );
+                if snapshot.provider == Provider::Claude && snapshot.windows.is_empty() {
+                    // A Claude statusLine redraw can temporarily carry no
+                    // rate_limits at all. That is "no new quota sample", not
+                    // proof that this session's allowance disappeared. Keep
+                    // only still-current last-known windows; their freshness
+                    // metadata is deliberately left untouched, so they render
+                    // stale rather than current once their evidence ages out.
+                    snapshot.windows = previous_windows
+                        .into_iter()
+                        .filter(|window| window.is_current(snapshot.fetched_at_unix))
+                        .collect();
+                } else {
+                    merge_omitted_window_list(
+                        &mut snapshot.windows,
+                        &previous_windows,
+                        snapshot.fetched_at_unix,
+                    );
+                }
             }
             snapshot
                 .session_windows
@@ -2348,6 +2361,54 @@ mod tests {
                 .unwrap()
                 .observed_at_unix,
             Some(300)
+        );
+    }
+
+    #[test]
+    fn claude_payload_without_rate_limits_keeps_last_quota_at_its_old_age() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let payload = json!({"session_id":"session-a"});
+
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(Provider::Claude, vec![five_hour(22.0, 2_000)], 100)
+                    .session_local(),
+                &payload,
+                Some("generation-a"),
+            )
+            .unwrap();
+        cache
+            .save_statusline_observation_with_api_generation(
+                Provider::Claude,
+                ProviderSnapshot::new(Provider::Claude, vec![], 300).session_local(),
+                &payload,
+                Some("generation-b"),
+            )
+            .unwrap();
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert_eq!(
+            window_in(
+                saved.windows_for_session(Some("session-a")),
+                WindowKind::FiveHour
+            )
+            .unwrap()
+            .used_percent,
+            22.0
+        );
+        assert_eq!(
+            saved
+                .quota_observation_for_session(Some("session-a"), WindowKind::FiveHour)
+                .unwrap()
+                .observed_at_unix,
+            Some(100),
+            "a payload with no quota must not make the old percentage fresh"
         );
     }
 
