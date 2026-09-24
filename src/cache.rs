@@ -4,7 +4,7 @@ use crate::cli::{
 use crate::identity::PLUGIN_ID;
 use crate::model::{
     merge_omitted_window_list, window_in, BillingTarget, ContextUsage, Provider, ProviderSnapshot,
-    UsageWindow, WindowKind,
+    SessionQuotaObservation, UsageWindow, WindowKind,
 };
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -286,17 +286,58 @@ impl CacheStore {
         snapshot: ProviderSnapshot,
         observation: &Value,
     ) -> Result<()> {
-        self.save_statusline_observation_with_quota_scope(provider, snapshot, observation, None)
+        self.save_statusline_observation_inner(provider, snapshot, observation, None, None)
     }
 
-    /// Claude statusLine observations also stamp an opaque profile scope so
-    /// idle panes on the same `CLAUDE_CONFIG_DIR` share the newest quota.
+    /// Store API-generation evidence with a Claude statusLine observation.
+    ///
+    /// The generation is an opaque fingerprint of documented API-derived
+    /// statusLine fields. It says only that another provider response
+    /// completed; it is never used as account identity.
+    pub fn save_statusline_observation_with_api_generation(
+        &self,
+        provider: Provider,
+        snapshot: ProviderSnapshot,
+        observation: &Value,
+        api_generation: Option<&str>,
+    ) -> Result<()> {
+        self.save_statusline_observation_inner(
+            provider,
+            snapshot,
+            observation,
+            None,
+            api_generation,
+        )
+    }
+
+    /// Legacy profile-scope writer kept for cache-format compatibility tests.
+    ///
+    /// Current Claude production observations are session-local and do not
+    /// call this path because a profile directory is not serving-account
+    /// proof.
     pub fn save_statusline_observation_with_quota_scope(
+        &self,
+        provider: Provider,
+        snapshot: ProviderSnapshot,
+        observation: &Value,
+        quota_scope: Option<&str>,
+    ) -> Result<()> {
+        self.save_statusline_observation_inner(
+            provider,
+            snapshot,
+            observation,
+            quota_scope,
+            None,
+        )
+    }
+
+    fn save_statusline_observation_inner(
         &self,
         provider: Provider,
         mut snapshot: ProviderSnapshot,
         observation: &Value,
         quota_scope: Option<&str>,
+        api_generation: Option<&str>,
     ) -> Result<()> {
         self.ensure()?;
         let session_id = statusline_session_id(observation);
@@ -341,6 +382,12 @@ impl CacheStore {
                     .insert(session_id.to_string(), context);
             }
         }
+        merge_session_quota_observations(
+            &mut snapshot,
+            previous_snapshot,
+            session_id,
+            api_generation,
+        );
         merge_session_windows(&mut snapshot, previous_snapshot, session_id, quota_scope);
         let current_session_ids = session_id
             .map(|session_id| vec![session_id.to_string()])
@@ -981,6 +1028,87 @@ fn merge_session_models(
     }
 }
 
+fn merge_session_quota_observations(
+    snapshot: &mut ProviderSnapshot,
+    previous: Option<&ProviderSnapshot>,
+    session_id: Option<&str>,
+    api_generation: Option<&str>,
+) {
+    if snapshot.provider != Provider::Claude || !snapshot.session_quota_only {
+        return;
+    }
+
+    let previous = previous.filter(|previous| previous.session_quota_only);
+    if let Some(previous) = previous {
+        snapshot.session_quota_observations = previous.session_quota_observations.clone();
+    }
+
+    let Some(session_id) = session_id else {
+        return;
+    };
+    let previous_windows = previous
+        .and_then(|previous| previous.session_windows.get(session_id))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let previous_observations = previous
+        .and_then(|previous| previous.session_quota_observations.get(session_id))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    let mut observations = snapshot
+        .session_quota_observations
+        .remove(session_id)
+        .unwrap_or_default();
+
+    for window in &snapshot.windows {
+        let previous_window = window_in(previous_windows, window.kind);
+        let previous_observation = previous_observations
+            .iter()
+            .find(|observation| observation.kind == window.kind);
+        let previous_generation = previous_observation
+            .and_then(|observation| observation.api_generation.as_deref());
+
+        let observed_at_unix = match (previous_window, previous_observation) {
+            (None, _) => Some(snapshot.fetched_at_unix),
+            (Some(previous_window), _) if previous_window != window => Some(snapshot.fetched_at_unix),
+            (Some(_), Some(previous_observation))
+                if api_generation.is_some() && api_generation != previous_generation =>
+            {
+                Some(snapshot.fetched_at_unix)
+            }
+            (Some(_), Some(previous_observation)) => previous_observation.observed_at_unix,
+            // A legacy/replayed value can establish a generation baseline but
+            // not its age. The next changed generation or quota tuple will
+            // make it fresh.
+            (Some(_), None) => None,
+        };
+
+        let stored_generation = api_generation
+            .map(str::to_string)
+            .or_else(|| previous_observation.and_then(|observation| observation.api_generation.clone()));
+
+        if let Some(existing) = observations
+            .iter_mut()
+            .find(|observation| observation.kind == window.kind)
+        {
+            existing.observed_at_unix = observed_at_unix;
+            existing.api_generation = stored_generation;
+        } else {
+            observations.push(SessionQuotaObservation {
+                kind: window.kind,
+                observed_at_unix,
+                api_generation: stored_generation,
+            });
+        }
+    }
+
+    if !observations.is_empty() {
+        snapshot
+            .session_quota_observations
+            .insert(session_id.to_string(), observations);
+    }
+}
+
 fn merge_session_windows(
     snapshot: &mut ProviderSnapshot,
     previous: Option<&ProviderSnapshot>,
@@ -1175,6 +1303,7 @@ fn prune_session_diagnostics(snapshot: &mut ProviderSnapshot, current_session_id
     prune_session_map(&mut snapshot.session_models, current_session_ids);
     prune_session_map(&mut snapshot.session_contexts, current_session_ids);
     prune_session_map(&mut snapshot.session_windows, current_session_ids);
+    prune_session_map(&mut snapshot.session_quota_observations, current_session_ids);
     prune_session_map(&mut snapshot.session_quota_scopes, current_session_ids);
     snapshot.quota_scope_windows.retain(|scope, _| {
         snapshot
