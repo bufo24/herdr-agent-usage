@@ -223,7 +223,10 @@ fn claude_check_resolves_settings_under_claude_config_dir() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Claude statusLine collector is installed"), "{stdout}");
+    assert!(
+        stdout.contains("Claude statusLine collector is installed"),
+        "{stdout}"
+    );
     assert!(stdout.contains(profile.to_str().unwrap()), "{stdout}");
 }
 
