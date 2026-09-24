@@ -1067,7 +1067,7 @@ fn merge_session_quota_observations(
             (Some(previous_window), _) if previous_window != window => {
                 Some(snapshot.fetched_at_unix)
             }
-            (Some(_), Some(previous_observation))
+            (Some(_), Some(_))
                 if api_generation.is_some() && api_generation != previous_generation =>
             {
                 Some(snapshot.fetched_at_unix)
