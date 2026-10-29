@@ -182,10 +182,10 @@ Enable pacing during installation with:
 ./install.sh --sidebar-pacing on
 ```
 
-Paced rows read like `5h -6% 45 min`: window, signed percentage-point
-headroom versus the remaining clock, and time left. Negative means usage is
-ahead of pace; positive means there is headroom. `3d2h` is one compact time
-value. Context and monthly rows keep their configured quota presentation.
+Paced rows read like `5h -6% 45 min 9%`: window, signed percentage-point
+headroom versus the remaining clock, time left, and quota remaining. Negative
+means usage is ahead of pace; positive means there is headroom. `3d2h` is one
+compact time value. Context and monthly rows keep their configured quota presentation.
 When a provider omits usable reset information, that row falls back to its
 normal quota percentage instead of guessing.
 

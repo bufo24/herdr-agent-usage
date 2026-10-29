@@ -733,11 +733,15 @@ fn sidebar_window_parts(
     pacing: SidebarPacing,
 ) -> WindowParts {
     if pacing.is_on() && matches!(window.kind, WindowKind::FiveHour | WindowKind::Weekly) {
-        if let Some(pace) = window_pace(window, now_unix) {
+        if let Some(pace) = window_pace_with_min_elapsed(window, now_unix, 0.0) {
             return WindowParts {
                 label: window.display_label().to_string(),
                 percent: format_signed_pace(pace.delta),
-                eta: format_pace_remaining(pace.remaining_seconds),
+                eta: format!(
+                    "{} {}%",
+                    format_pace_remaining(pace.remaining_seconds),
+                    format_percent(window.remaining_percent)
+                ),
                 meter: None,
             };
         }
@@ -830,7 +834,14 @@ struct WindowPace {
 }
 
 fn window_pace(window: &UsageWindow, now_unix: u64) -> Option<WindowPace> {
-    const MIN_ELAPSED_FRACTION: f64 = 0.05;
+    window_pace_with_min_elapsed(window, now_unix, 0.05)
+}
+
+fn window_pace_with_min_elapsed(
+    window: &UsageWindow,
+    now_unix: u64,
+    min_elapsed_fraction: f64,
+) -> Option<WindowPace> {
     let remaining_seconds = window
         .resets_at?
         .unix_seconds()
@@ -840,7 +851,7 @@ fn window_pace(window: &UsageWindow, now_unix: u64) -> Option<WindowPace> {
         .duration_seconds
         .unwrap_or_else(|| window.kind.duration_seconds());
     let elapsed_seconds = duration.checked_sub(remaining_seconds)?;
-    if (elapsed_seconds as f64) < MIN_ELAPSED_FRACTION * duration as f64 {
+    if (elapsed_seconds as f64) < min_elapsed_fraction * duration as f64 {
         return None;
     }
     let elapsed_percent = elapsed_seconds as f64 * 100.0 / duration as f64;
@@ -2091,8 +2102,8 @@ mod tests {
         assert!(quota.quota_5h.contains("9%"), "{}", quota.quota_5h);
 
         let pace = paced(&snapshot, 0);
-        assert_eq!(pace.quota_5h, "5h -6% 45 min");
-        assert_eq!(pace.quota_week, "7d -6% 6d");
+        assert_eq!(pace.quota_5h, "5h -6% 45 min 9%");
+        assert_eq!(pace.quota_week, "7d -6% 6d 80%");
         assert_eq!(pace.quota_5h_severity, quota.quota_5h_severity);
     }
 
@@ -2109,6 +2120,20 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_pacing_is_visible_early_in_the_weekly_window() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Codex,
+            vec![window(
+                WindowKind::Weekly,
+                11.0,
+                7 * 24 * 60 * 60 - 3 * 60 * 60,
+            )],
+            0,
+        );
+        assert_eq!(paced(&snapshot, 0).quota_week, "7d -9% 6d21h 89%");
+    }
+
+    #[test]
     fn sidebar_pacing_uses_a_provider_normalized_duration_and_compact_days() {
         let snapshot = ProviderSnapshot::new(
             Provider::Omp,
@@ -2118,7 +2143,7 @@ mod tests {
             ],
             0,
         );
-        assert_eq!(paced(&snapshot, 0).quota_5h, "4d +3% 3d2h");
+        assert_eq!(paced(&snapshot, 0).quota_5h, "4d +3% 3d2h 80%");
     }
 
     /// Six cells, the default 26-column sidebar after Herdr chrome. The bar

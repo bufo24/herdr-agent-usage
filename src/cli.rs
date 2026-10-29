@@ -524,7 +524,7 @@ pub enum SidebarPacing {
     /// Keep quota percentages and gauges.
     #[default]
     Off,
-    /// Show `5h -6% 45 min` style pace text.
+    /// Show `5h -6% 45 min 9%` style pace text.
     On,
 }
 
